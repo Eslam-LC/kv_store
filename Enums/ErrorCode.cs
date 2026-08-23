@@ -1,4 +1,4 @@
-namespace kv_store
+namespace kv_store.Enums
 {
     public enum ErrorCode
     {
@@ -7,5 +7,7 @@ namespace kv_store
         KeyNotValid,
         EntryIsEmpty,
         InvalidPath,
+        InvalidArguments,
+        UnInitializedInstance,
     }
 }
