@@ -42,7 +42,9 @@ namespace kv_store.Implementations
             if (loggerFile == null || path == null || binaryWriter == null)
                 return new Result(ErrorCode.InvalidPath);
 
-            walRecord.GetInBytes(out byte[] bytes);
+            var errCode = walRecord.GetInBytes(out byte[] bytes);
+            if (errCode.Error != ErrorCode.None)
+                return errCode;
             binaryWriter.Write(bytes); // writelineasync
             // wal_logger.FlushAsync();
             loggerFile.Flush(true);

@@ -9,5 +9,6 @@ namespace kv_store.Enums
         InvalidPath,
         InvalidArguments,
         UnInitializedInstance,
+        InvalidOperation,
     }
 }
