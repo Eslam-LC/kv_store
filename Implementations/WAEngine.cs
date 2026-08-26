@@ -7,16 +7,18 @@ namespace kv_store.Implementations
     the Engine may write to wal and fail to write to memory store which is to be expected.
     also it will log records with invalid keys.
     */
-    public class WAEngine : IWriteAheadEngine
+    class WAEngine : IWriteAheadEngine
     {
         IWriteAheadLogger? fileLogger;
         IKeyValueStore? memStore;
         IWriteAheadReader? reader;
+        ISnapshot? _snapshot;
 
         public Result Initialize(
             IWriteAheadLogger file_logger,
             IKeyValueStore memory_store,
-            IWriteAheadReader log_reader
+            IWriteAheadReader log_reader,
+            Snapshot snapshot
         )
         {
             if (file_logger == null || memory_store == null || log_reader == null)
@@ -24,6 +26,7 @@ namespace kv_store.Implementations
             fileLogger = file_logger;
             memStore = memory_store;
             reader = log_reader;
+            _snapshot = snapshot;
             return new Result(ErrorCode.None);
         }
 
@@ -115,6 +118,33 @@ namespace kv_store.Implementations
                         return new Result(ErrorCode.InvalidOperation);
                 }
             }
+            return new Result(ErrorCode.None);
+        }
+
+        public Result SaveSnapshot(string path = @"./data/snapshot.dat")
+        {
+            if (_snapshot == null || memStore == null || fileLogger == null)
+                return new Result(ErrorCode.UnInitializedInstance);
+            if (string.IsNullOrWhiteSpace(path))
+                return new Result(ErrorCode.InvalidPath);
+            var errCode = _snapshot.SaveSnapshot(in memStore, path);
+            if (errCode.Error != ErrorCode.None)
+                return errCode;
+            errCode = fileLogger.Truncate();
+            if (errCode.Error != ErrorCode.None)
+                return errCode;
+            return new Result(ErrorCode.None);
+        }
+
+        public Result LoadSnapshot(string path = @"./data/snapshot.dat")
+        {
+            if (_snapshot == null || memStore == null)
+                return new Result(ErrorCode.UnInitializedInstance);
+            if (string.IsNullOrWhiteSpace(path))
+                return new Result(ErrorCode.InvalidPath);
+            var errCode = _snapshot.LoadSnapshot(memStore, path);
+            if (errCode.Error != ErrorCode.None)
+                return errCode;
             return new Result(ErrorCode.None);
         }
     }

@@ -1,9 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.Data;
-using System.Linq;
+using System.IO.Hashing;
 using System.Text;
-using System.Threading.Tasks;
 using kv_store.Enums;
 using kv_store.Interfaces;
 
@@ -11,12 +7,14 @@ namespace kv_store.Implementations
 {
     public record struct WARecord : IWriteAheadRecord
     {
+        byte[] _Crc32Hash;
         Int32 _RecordLength;
         WAOperation _Op;
         short _KeyLength;
         byte[] _Key;
         Int32 _ValueLength;
         byte[]? _Value;
+        public readonly byte[] Crc32Hash => _Crc32Hash;
 
         public readonly int RecordLength => _RecordLength;
 
@@ -32,9 +30,9 @@ namespace kv_store.Implementations
 
         public static Result GetRecord(
             out WARecord record,
-            WAOperation operation,
-            string key,
-            byte[]? value = null
+            in WAOperation operation,
+            in string key,
+            in byte[]? value = null
         )
         {
             record = new WARecord();
@@ -58,28 +56,28 @@ namespace kv_store.Implementations
             return new Result(ErrorCode.None);
         }
 
-        public readonly Result GetInBytes(out byte[] bytes)
+        public static Result GetInBytes(in WARecord record, out byte[] bytes)
         {
             // Force Big Endian alignness
             //
-            if (_Key == null || _Value == null)
+            if (record._Key == null || record._Value == null)
             {
                 bytes = [];
                 return new Result(ErrorCode.ValueNotValid);
             }
             bytes =
             [
-                .. BitConverter.GetBytes(_RecordLength),
-                (byte)_Op,
-                .. BitConverter.GetBytes(_KeyLength),
-                .. _Key,
-                .. BitConverter.GetBytes(_ValueLength),
-                .. _Value,
+                .. BitConverter.GetBytes(record._RecordLength),
+                (byte)record._Op,
+                .. BitConverter.GetBytes(record._KeyLength),
+                .. record._Key,
+                .. BitConverter.GetBytes(record._ValueLength),
+                .. record._Value,
             ];
             return new Result(ErrorCode.None);
         }
 
-        public static Result GetFromBytes(byte[] bytes, out WARecord record)
+        public static Result GetFromBytes(in byte[] bytes, out WARecord record)
         {
             record = new();
             if (bytes == null)
@@ -101,11 +99,18 @@ namespace kv_store.Implementations
                 record._ValueLength = BitConverter.ToInt32(bytes.AsSpan(valueIndex, 4));
                 record._Value = [.. bytes.AsSpan(valueIndex + 4, record._ValueLength)];
             }
+
+            // byte[] bytesToBeChecked = [.. BitConverter.GetBytes(record.RecordLength), .. bytes];
+            var errCode = GetCrc32Hash(bytes, out var Checksum);
+            if (errCode.Error != ErrorCode.None)
+                return errCode;
+
+            record._Crc32Hash = Checksum;
             return new Result(ErrorCode.None);
         }
 
         public static Result GetOpKeyValue(
-            WARecord record,
+            in WARecord record,
             out WAOperation operation,
             out string key,
             out byte[] value
@@ -116,27 +121,28 @@ namespace kv_store.Implementations
             value = record.Value ?? [];
             return new Result(ErrorCode.None);
         }
-        // static void PrintRecordsCollection(ICollection<WARecord> records)
-        // {
-        //     if (records == null)
-        //         return;
-        //     foreach (var record in records)
-        //     {
-        //         Console.WriteLine($"Record Length: {record.RecordLength}");
-        //         Console.WriteLine($"Operation: {record.Op}");
-        //         Console.WriteLine($"Key Length: {record.KeyLength}");
-        //         Console.WriteLine($"Key: {Encoding.UTF8.GetString(record.Key)}");
-        //         Console.WriteLine($"Value Length: {record.ValueLength}");
-        //         if (record.ValueLength > 0)
-        //         {
-        //             Console.Write($"Value: ");
-        //             foreach (var item in record.Value ?? [])
-        //             {
-        //                 Console.Write($" {item}");
-        //             }
-        //         }
-        //     }
-        //     Console.WriteLine();
-        // }
+
+        public static Result GetCrc32Hash(in byte[] sourceRecordInBytes, out byte[] destination)
+        {
+            destination = new byte[4];
+            var valid = Crc32.TryHash(sourceRecordInBytes, destination, out int _);
+            if (!valid)
+                return new Result(ErrorCode.UnExpectedHashingFailure);
+            return new Result(ErrorCode.None);
+        }
+
+        public static Result GetInBytesWithHash(in WARecord record, out byte[] bytesWithHash)
+        {
+            bytesWithHash = [];
+            var errCode = GetInBytes(record, out var bytes);
+            if (errCode.Error != ErrorCode.None)
+                return errCode;
+
+            errCode = GetCrc32Hash(bytes.AsSpan(4).ToArray(), out var destination);
+            if (errCode.Error != ErrorCode.None)
+                return errCode;
+            bytesWithHash = [.. destination, .. bytes];
+            return new Result(ErrorCode.None);
+        }
     }
 }

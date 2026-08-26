@@ -12,5 +12,7 @@ namespace kv_store.Interfaces
         public Result TryGet(string key, out byte[] value);
         public Result Delete(string key);
         public Result ReplayRecords();
+        public Result SaveSnapshot(string path);
+        public Result LoadSnapshot(string path);
     }
 }

@@ -10,5 +10,10 @@ namespace kv_store.Enums
         InvalidArguments,
         UnInitializedInstance,
         InvalidOperation,
+        UnExpectedHashingFailure,
+        CorruptedEntry,
+        IOError,
+        AccessDenied,
+        UnexpectedError,
     }
 }

@@ -11,5 +11,6 @@ namespace kv_store.Interfaces
         string? Path { get; }
         public Result Append(WARecord WARecord);
         public Result Initialize(string LogPath);
+        public Result Truncate();
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
 using kv_store.Enums;
@@ -54,6 +55,18 @@ namespace kv_store.Implementations
                 return new Result(ErrorCode.None);
             else
                 return new Result(ErrorCode.KeyNotValid);
+        }
+
+        public Result GetReadOnly(out ReadOnlyDictionary<string, byte[]> keyValuePairs)
+        {
+            keyValuePairs = kvStore.AsReadOnly();
+            return new Result(ErrorCode.None);
+        }
+
+        public Result Clear()
+        {
+            kvStore.Clear();
+            return new Result(ErrorCode.None);
         }
     }
 }

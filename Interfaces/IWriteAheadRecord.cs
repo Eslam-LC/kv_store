@@ -15,7 +15,5 @@ namespace kv_store.Interfaces
         byte[] Key { get; }
         int ValueLength { get; }
         byte[]? Value { get; }
-
-        public Result GetInBytes(out byte[] bytes);
     }
 }

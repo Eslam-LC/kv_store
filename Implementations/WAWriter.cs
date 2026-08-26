@@ -7,11 +7,12 @@ using kv_store.Interfaces;
 
 namespace kv_store.Implementations
 {
-    public class WAWriter : IDisposable, IWriteAheadLogger
+    public class WAWriter : IWriteAheadLogger
     {
         string? path;
-        FileStream? loggerFile;
-        BinaryWriter? binaryWriter;
+
+        // FileStream? loggerFile;
+        // BinaryWriter? binaryWriter;
 
         public string? Path => path;
 
@@ -21,10 +22,7 @@ namespace kv_store.Implementations
             if (IsEmpty)
                 return errCode;
 
-            // wtf should be done if a constructor is called with invalid arguments. other than throwing exception.
             path = LogPath;
-            loggerFile = new FileStream(path, FileMode.Append, FileAccess.Write); // handle exceptions
-            binaryWriter = new(loggerFile);
             return new Result(ErrorCode.None);
         }
 
@@ -39,21 +37,64 @@ namespace kv_store.Implementations
 
         public Result Append(WARecord walRecord)
         {
-            if (loggerFile == null || path == null || binaryWriter == null)
+            if (string.IsNullOrWhiteSpace(path))
                 return new Result(ErrorCode.InvalidPath);
 
-            var errCode = walRecord.GetInBytes(out byte[] bytes);
+            var errCode = WARecord.GetInBytesWithHash(walRecord, out byte[] bytes);
             if (errCode.Error != ErrorCode.None)
                 return errCode;
-            binaryWriter.Write(bytes); // writelineasync
-            // wal_logger.FlushAsync();
-            loggerFile.Flush(true);
+
+            try
+            {
+                using var loggerFile = new FileStream(path, FileMode.Append, FileAccess.Write);
+                using var binaryWriter = new BinaryWriter(loggerFile);
+                binaryWriter.Write(bytes); // writelineasync
+                // wal_logger.FlushAsync();
+                loggerFile.Flush(true);
+            }
+            catch (FileNotFoundException)
+            {
+                return new Result(ErrorCode.InvalidPath);
+            }
+            catch (IOException)
+            {
+                return new Result(ErrorCode.IOError);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return new Result(ErrorCode.AccessDenied);
+            }
+            catch (Exception)
+            {
+                return new Result(ErrorCode.UnexpectedError);
+            }
+
             return new Result(ErrorCode.None);
         }
 
-        public void Dispose()
+        public Result Truncate()
         {
-            loggerFile?.Close();
+            if (string.IsNullOrWhiteSpace(path))
+                return new Result(ErrorCode.InvalidPath);
+
+            try
+            {
+                using var fileLogger = new FileStream(path, FileMode.Create, FileAccess.Write);
+            }
+            catch (FileNotFoundException)
+            {
+                return new Result(ErrorCode.InvalidPath);
+            }
+            catch (IOException)
+            {
+                return new Result(ErrorCode.IOError);
+            }
+            catch (Exception)
+            {
+                return new Result(ErrorCode.UnexpectedError);
+            }
+
+            return new Result(ErrorCode.None);
         }
     }
 }
