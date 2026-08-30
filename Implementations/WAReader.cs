@@ -3,19 +3,15 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using kv_store.Enums;
-using kv_store.Interfaces;
 
 namespace kv_store.Implementations
 {
-    public class WAReader : IWriteAheadReader
+    public class WAReader
     {
         string? _path;
-
-        // FileStream? logFile;
-        // BinaryReader? binaryReader;
         public string? Path => _path;
 
-        public Result Initialize(string path = @"./data/wal_log")
+        public ErrorCode Initialize(string path = @"./data/wal_log")
         {
             var errCode = IsFileExist(path, out bool valid);
             if (!valid)
@@ -23,29 +19,29 @@ namespace kv_store.Implementations
 
             _path = path;
 
-            return new Result(ErrorCode.None);
+            return ErrorCode.None;
         }
 
-        private static Result IsFileExist(string _path, out bool valid)
+        private static ErrorCode IsFileExist(string _path, out bool valid)
         {
             valid = false;
             bool pathInvalid = string.IsNullOrWhiteSpace(_path);
             if (pathInvalid)
-                return new Result(ErrorCode.InvalidPath);
+                return ErrorCode.InvalidPath;
 
             bool fileExists = File.Exists(_path);
             if (!fileExists)
-                return new Result(ErrorCode.InvalidPath);
+                return ErrorCode.InvalidPath;
 
             valid = true;
-            return new Result(ErrorCode.None);
+            return ErrorCode.None;
         }
 
-        public Result ReadRecords(out ICollection<WARecord> records)
+        public ErrorCode ReadRecords(out ICollection<WARecord> records)
         {
             records = [];
             if (string.IsNullOrWhiteSpace(_path))
-                return new Result(ErrorCode.UnInitializedInstance);
+                return ErrorCode.UnInitializedInstance;
             var buffer = new byte[4];
             int bytesRead;
             try
@@ -67,36 +63,46 @@ namespace kv_store.Implementations
                     var bytes = new byte[RecordLength];
                     bytesRead = binaryReader.Read(bytes, 0, bytes.Length);
                     if (bytesRead < bytes.Length)
-                        return new Result(ErrorCode.CorruptedEntry);
+                        return ErrorCode.CorruptedEntry;
 
-                    var errCode = WARecord.GetFromBytes(bytes, out WARecord record);
-                    if (errCode.Error != ErrorCode.None)
+                    var errCode = WARecord.GetFromBytes(bytes, out WARecord? _record);
+                    if (errCode != ErrorCode.None)
                         return errCode;
 
+                    WARecord record;
+                    if (_record == null)
+                        return ErrorCode.UnexpectedError;
+                    else
+                        record = (WARecord)_record;
+
                     if (!record.Crc32Hash.SequenceEqual(hash))
-                        return new Result(ErrorCode.CorruptedEntry);
+                        return ErrorCode.CorruptedEntry;
 
                     records.Add(record);
                 } while (logFile.Position < logFile.Length);
             }
+            catch (EndOfStreamException)
+            {
+                return ErrorCode.CorruptedEntry;
+            }
             catch (FileNotFoundException)
             {
-                return new Result(ErrorCode.InvalidPath);
+                return ErrorCode.InvalidPath;
             }
             catch (IOException)
             {
-                return new Result(ErrorCode.IOError);
+                return ErrorCode.IOError;
             }
             catch (UnauthorizedAccessException)
             {
-                return new Result(ErrorCode.AccessDenied);
+                return ErrorCode.AccessDenied;
             }
             catch (Exception)
             {
-                return new Result(ErrorCode.UnexpectedError);
+                return ErrorCode.UnexpectedError;
             }
 
-            return new Result(ErrorCode.None);
+            return ErrorCode.None;
         }
     }
 }

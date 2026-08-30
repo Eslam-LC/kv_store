@@ -4,69 +4,81 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
 using kv_store.Enums;
-using kv_store.Interfaces;
 
 namespace kv_store.Implementations
 {
-    class KeyValueStore : IKeyValueStore
+    class KeyValueStore
     {
-        readonly Dictionary<string, byte[]> kvStore = [];
+        Dictionary<string, byte[]> kvStore = [];
 
-        public Result Put(string key, byte[] value)
+        public ErrorCode Put(string key, byte[] value)
         {
             if (key == null)
-                return new Result(ErrorCode.KeyNotValid);
+                return ErrorCode.KeyNotValid;
             if (value == null)
-                return new Result(ErrorCode.ValueNotValid);
+                return ErrorCode.ValueNotValid;
 
-            if (kvStore.ContainsKey(key))
-                kvStore[key] = value;
-            else
-                kvStore.TryAdd(key, value);
-            return new Result(ErrorCode.None);
+            kvStore[key] = value;
+
+            return ErrorCode.None;
         }
 
-        public Result TryGet(string key, out byte[] value)
+        public ErrorCode BulkInitialize(IDictionary<string, byte[]> dict)
+        {
+            if (dict == null)
+                return ErrorCode.InvalidArguments;
+            try
+            {
+                kvStore = new(dict);
+            }
+            catch
+            {
+                return ErrorCode.UnexpectedError;
+            }
+            return ErrorCode.None;
+        }
+
+        public ErrorCode TryGet(string key, out byte[] value)
         {
             if (key == null)
             {
                 value = [];
-                return new Result(ErrorCode.KeyNotValid);
+                return ErrorCode.KeyNotValid;
             }
 
             var success = kvStore.TryGetValue(key, out value!);
 
             if (success)
-                return new Result(ErrorCode.None);
+                return ErrorCode.None;
             else
-                return new Result(ErrorCode.KeyNotValid);
+                return ErrorCode.KeyNotFound;
         }
 
-        public Result Delete(string key)
+        public ErrorCode Delete(string key)
         {
             if (key == null)
             {
-                return new Result(ErrorCode.KeyNotValid);
+                return ErrorCode.KeyNotValid;
             }
 
             var success = kvStore.Remove(key);
 
             if (success)
-                return new Result(ErrorCode.None);
+                return ErrorCode.None;
             else
-                return new Result(ErrorCode.KeyNotValid);
+                return ErrorCode.KeyNotValid;
         }
 
-        public Result GetReadOnly(out ReadOnlyDictionary<string, byte[]> keyValuePairs)
+        public ErrorCode GetReadOnly(out ReadOnlyDictionary<string, byte[]> keyValuePairs)
         {
             keyValuePairs = kvStore.AsReadOnly();
-            return new Result(ErrorCode.None);
+            return ErrorCode.None;
         }
 
-        public Result Clear()
+        public ErrorCode Clear()
         {
             kvStore.Clear();
-            return new Result(ErrorCode.None);
+            return ErrorCode.None;
         }
     }
 }

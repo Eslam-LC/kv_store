@@ -1,148 +1,200 @@
 using System.IO.Hashing;
 using System.Text;
 using kv_store.Enums;
-using kv_store.Interfaces;
 
 namespace kv_store.Implementations
 {
-    public record struct WARecord : IWriteAheadRecord
+    public record struct WARecord
     {
         byte[] _Crc32Hash;
-        Int32 _RecordLength;
+
+        // int _RecordLength;
         WAOperation _Op;
-        short _KeyLength;
-        byte[] _Key;
-        Int32 _ValueLength;
+        string _Key;
+        int? _ValueLength;
         byte[]? _Value;
         public readonly byte[] Crc32Hash => _Crc32Hash;
 
-        public readonly int RecordLength => _RecordLength;
+        // public readonly int RecordLength => _RecordLength;
 
         public readonly WAOperation Op => _Op;
 
-        public readonly short KeyLength => _KeyLength;
+        public readonly int KeyLength => Key.Length;
 
-        public readonly byte[] Key => _Key;
+        public readonly byte[] Key => Encoding.UTF8.GetBytes(_Key);
 
-        public readonly int ValueLength => _ValueLength;
+        public readonly string KeyAsString => _Key;
 
-        public readonly byte[]? Value => _Value;
+        public readonly int ValueLength => _ValueLength ?? 0;
 
-        public static Result GetRecord(
+        public readonly byte[] Value => _Value ?? [];
+
+        public static ErrorCode GetRecord(
             out WARecord record,
             in WAOperation operation,
             in string key,
             in byte[]? value = null
         )
         {
-            record = new WARecord();
-            if (string.IsNullOrWhiteSpace(key) || key.Length > short.MaxValue)
-                return new Result(ErrorCode.KeyNotValid);
-            if (operation == WAOperation.PUT && (value == null))
-                return new Result(ErrorCode.ValueNotValid);
-
-            record._Op = operation;
-            record._KeyLength = (short)key.Length;
-            record._ValueLength = (operation == WAOperation.DELETE) ? 0 : value!.Length;
-            record._Key = System.Text.Encoding.UTF8.GetBytes(key);
-            record._Value = (operation == WAOperation.DELETE) ? [] : value;
-            record._RecordLength = // RecordLength is explicitly excluded
-                sizeof(WAOperation)
-                + sizeof(short)
-                + sizeof(int)
-                + record._KeyLength
-                + record._ValueLength;
-
-            return new Result(ErrorCode.None);
-        }
-
-        public static Result GetInBytes(in WARecord record, out byte[] bytes)
-        {
-            // Force Big Endian alignness
-            //
-            if (record._Key == null || record._Value == null)
+            if (value == null && operation == WAOperation.PUT)
             {
-                bytes = [];
-                return new Result(ErrorCode.ValueNotValid);
+                record = new();
+                return ErrorCode.ValueNotValid;
             }
-            bytes =
-            [
-                .. BitConverter.GetBytes(record._RecordLength),
-                (byte)record._Op,
-                .. BitConverter.GetBytes(record._KeyLength),
-                .. record._Key,
-                .. BitConverter.GetBytes(record._ValueLength),
-                .. record._Value,
-            ];
-            return new Result(ErrorCode.None);
+
+            record = new()
+            {
+                _Crc32Hash = [],
+                // _RecordLength = 1 + Encoding.UTF8.GetByteCount(key) + 4 + value?.Length ?? 0,
+                _Op = operation,
+                _Key = key,
+                _ValueLength = (operation == WAOperation.PUT) ? value?.Length : null,
+                _Value = (operation == WAOperation.PUT) ? value : null,
+            };
+
+            return ErrorCode.None;
         }
 
-        public static Result GetFromBytes(in byte[] bytes, out WARecord record)
+        public static ErrorCode GetInBytes(in WARecord record, out byte[]? bytes)
         {
-            record = new();
+            bytes = null;
+            if (string.IsNullOrWhiteSpace(record._Key))
+            {
+                return ErrorCode.KeyNotValid;
+            }
+            if (
+                record._Op == WAOperation.PUT
+                && (record._Value == null || record._ValueLength == null)
+            )
+                return ErrorCode.ValueNotValid;
+
+            try
+            {
+                using var memStream = new MemoryStream();
+                using var binaryWriter = new BinaryWriter(memStream);
+
+                binaryWriter.Write((byte)record.Op);
+                binaryWriter.Write(record._Key);
+                if (record.Op == WAOperation.PUT)
+                {
+                    binaryWriter.Write(record.ValueLength);
+                    binaryWriter.Write(record.Value);
+                }
+
+                bytes = [.. memStream.ToArray()];
+            }
+            catch (FileNotFoundException)
+            {
+                return ErrorCode.InvalidPath;
+            }
+            catch (IOException)
+            {
+                return ErrorCode.IOError;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return ErrorCode.AccessDenied;
+            }
+            catch (Exception)
+            {
+                return ErrorCode.UnexpectedError;
+            }
+
+            return ErrorCode.None;
+        }
+
+        public static ErrorCode GetFromBytes(in byte[] bytes, out WARecord? record)
+        {
+            record = null;
             if (bytes == null)
+                return ErrorCode.EntryIsEmpty;
+
+            using var memStream = new MemoryStream(bytes);
+            using var binaryReader = new BinaryReader(memStream);
+
+            try
             {
-                return new Result(ErrorCode.ValueNotValid);
+                var Op = (WAOperation)binaryReader.ReadByte();
+
+                var p = memStream.Position;
+                var Key = binaryReader.ReadString();
+                var KeyBytesRead = memStream.Position - p;
+
+                if (Key.Length <= 0 || Key.Length > bytes.Length - 1 || Key.Length > int.MaxValue)
+                    return ErrorCode.CorruptedEntry;
+
+                var ValueLength = (Op == WAOperation.PUT) ? binaryReader.ReadInt32() : 0;
+                if (ValueLength < 0 || ValueLength > bytes.Length - 4 - 1 - KeyBytesRead)
+                    return ErrorCode.CorruptedEntry;
+
+                var Value = (Op == WAOperation.PUT) ? binaryReader.ReadBytes(ValueLength) : null;
+
+                var errCode = GetCrc32Hash(bytes, out var CheckSum);
+                if (errCode != ErrorCode.None)
+                    return errCode;
+
+                record = new()
+                {
+                    _Crc32Hash = CheckSum,
+                    // _RecordLength = 1 + (int)KeyBytesRead + 4 + ValueLength,
+                    _Op = Op,
+                    _Key = Key,
+                    _ValueLength = ValueLength,
+                    _Value = Value,
+                };
             }
-            record._RecordLength = bytes.Length;
-            record._Op = (WAOperation)bytes[0];
-            record._KeyLength = BitConverter.ToInt16(bytes.AsSpan(1, 2));
-            record._Key = [.. bytes.AsSpan(3, record._KeyLength)];
-            if (record._Op == WAOperation.DELETE)
+            catch (EndOfStreamException)
             {
-                record._ValueLength = 0;
-                record._Value = [];
+                return ErrorCode.CorruptedEntry;
             }
-            else
+            catch (FileNotFoundException)
             {
-                int valueIndex = 1 + 2 + record._KeyLength;
-                record._ValueLength = BitConverter.ToInt32(bytes.AsSpan(valueIndex, 4));
-                record._Value = [.. bytes.AsSpan(valueIndex + 4, record._ValueLength)];
+                return ErrorCode.InvalidPath;
+            }
+            catch (IOException)
+            {
+                return ErrorCode.IOError;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return ErrorCode.AccessDenied;
+            }
+            catch (Exception)
+            {
+                return ErrorCode.UnexpectedError;
             }
 
-            // byte[] bytesToBeChecked = [.. BitConverter.GetBytes(record.RecordLength), .. bytes];
-            var errCode = GetCrc32Hash(bytes, out var Checksum);
-            if (errCode.Error != ErrorCode.None)
-                return errCode;
-
-            record._Crc32Hash = Checksum;
-            return new Result(ErrorCode.None);
+            return ErrorCode.None;
         }
 
-        public static Result GetOpKeyValue(
-            in WARecord record,
-            out WAOperation operation,
-            out string key,
-            out byte[] value
-        )
-        {
-            operation = record.Op;
-            key = Encoding.UTF8.GetString(record.Key);
-            value = record.Value ?? [];
-            return new Result(ErrorCode.None);
-        }
-
-        public static Result GetCrc32Hash(in byte[] sourceRecordInBytes, out byte[] destination)
+        public static ErrorCode GetCrc32Hash(in byte[] sourceRecordInBytes, out byte[] destination)
         {
             destination = new byte[4];
             var valid = Crc32.TryHash(sourceRecordInBytes, destination, out int _);
             if (!valid)
-                return new Result(ErrorCode.UnExpectedHashingFailure);
-            return new Result(ErrorCode.None);
+                return ErrorCode.UnExpectedHashingFailure;
+            return ErrorCode.None;
         }
 
-        public static Result GetInBytesWithHash(in WARecord record, out byte[] bytesWithHash)
+        public static ErrorCode GetInBytesWithHash(in WARecord record, out byte[]? bytesWithHash)
         {
-            bytesWithHash = [];
+            bytesWithHash = null;
             var errCode = GetInBytes(record, out var bytes);
-            if (errCode.Error != ErrorCode.None)
+            if (errCode != ErrorCode.None)
                 return errCode;
 
-            errCode = GetCrc32Hash(bytes.AsSpan(4).ToArray(), out var destination);
-            if (errCode.Error != ErrorCode.None)
+            if (bytes == null)
+                return ErrorCode.UnexpectedError;
+
+            var bytesLength = BitConverter.GetBytes(bytes.Length);
+
+            errCode = GetCrc32Hash(bytes, out var CheckSum);
+            if (errCode != ErrorCode.None)
                 return errCode;
-            bytesWithHash = [.. destination, .. bytes];
-            return new Result(ErrorCode.None);
+
+            bytesWithHash = [.. CheckSum, .. bytesLength, .. bytes];
+
+            return ErrorCode.None;
         }
     }
 }
