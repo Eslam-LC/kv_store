@@ -13,19 +13,12 @@ namespace kv_store
         static void Main(string[] args)
         {
             ErrorCode errCode;
-            var writer = new WAWriter();
-            errCode = writer.Initialize();
 
-            var reader = new WAReader();
-            errCode = reader.Initialize();
-
-            var store = new KeyValueStore();
-            var snapper = new Snapshot();
-
-            var Engine = new WAEngine();
-            errCode = Engine.Initialize(writer, store, reader, snapper);
-            if (errCode != ErrorCode.None)
-                Console.WriteLine($"engine initialization error: {errCode.GetDescription()}");
+            var dataDirOption = new Option<DirectoryInfo>("--data-dir", "-d")
+            {
+                Description = "directory for wal_log and snapshot.dat.",
+                DefaultValueFactory = parseResult => new DirectoryInfo("./data"),
+            };
 
             var keyArgument = new Argument<string>("key") { Description = "the key of the entry" };
             var valueArgument = new Argument<string[]>("value") { Description = "value to insert" };
@@ -89,52 +82,92 @@ namespace kv_store
                     replayCommand,
                     exitCommand,
                 },
+                Options = { dataDirOption },
             };
+
+            DirectoryInfo? dir = rootCommand.Parse(args).GetValue(dataDirOption);
+
+            dir ??= new(@"./data");
 
             string? ErrorMessage = null,
                 SuccessMessage = null;
 
-            StringBuilder sb = new();
+            if (!dir.Exists)
+                dir.Create();
 
-            var SnapshotPath = @"./data/snapshot.dat";
+            var SnapshotPath = Path.Combine(dir.FullName, "snapshot.dat");
+            var WALPath = Path.Combine(dir.FullName, "wal_log");
+
+            var writer = new WAWriter();
+            errCode = writer.Initialize(WALPath);
+
+            var reader = new WAReader();
+            errCode = reader.Initialize(WALPath);
+
+            var store = new KeyValueStore();
+            var snapper = new Snapshot();
+
+            var Engine = new WAEngine();
+            errCode = Engine.Initialize(writer, store, reader, snapper);
+            if (errCode != ErrorCode.None)
+                Console.WriteLine($"engine initialization error: {errCode.GetDescription()}");
 
             bool valid = File.Exists(SnapshotPath);
 
             if (valid)
             {
-                errCode = Engine.LoadSnapshot();
+                errCode = Engine.LoadSnapshot(SnapshotPath);
                 if (errCode != ErrorCode.None)
-                    sb.Append($"Error: {errCode.GetDescription()}");
+                {
+                    valid = false;
+                    Console.WriteLine($"Error: {errCode.GetDescription()}");
+                }
                 else
-                    sb.Append($"snapshot loaded from: {SnapshotPath}.");
+                {
+                    Console.WriteLine($"snapshot loaded from: {SnapshotPath}.");
+                    valid = File.Exists(WALPath);
+
+                    if (valid)
+                    {
+                        errCode = Engine.ReplayRecords();
+                        if (errCode != ErrorCode.None)
+                        {
+                            Console.WriteLine($"Error: {errCode.GetDescription()}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"WAL appended from: {WALPath}.");
+                        }
+                    }
+                }
             }
 
-            // if snapshot fails loading may be prompt the user first to append wal log or not.
-            var WALLogPath = @"./data/wal_log";
-
-            valid = File.Exists(WALLogPath);
-
-            if (valid)
+            if (!valid)
             {
-                errCode = Engine.ReplayRecords();
-                if (errCode != ErrorCode.None)
+                if (File.Exists(WALPath))
                 {
-                    if (sb.Length > 0)
-                        sb.Append('\n');
-                    sb.Append($"Error: {errCode.GetDescription()}");
-                }
-                else
-                {
-                    if (sb.Length > 0)
-                        sb.Append('\n');
-                    sb.Append($"WAL appended from: {WALLogPath}.");
+                    Console.Write(
+                        $"Snapshot file do not exist or failed to load. do you want to append WAL operations anyway (y/n)?"
+                    );
+                    var key = Console.ReadKey();
+                    Console.WriteLine();
+                    if (key.KeyChar == 'y')
+                    {
+                        if (valid)
+                        {
+                            errCode = Engine.ReplayRecords();
+                            if (errCode != ErrorCode.None)
+                            {
+                                Console.WriteLine($"Error: {errCode.GetDescription()}");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"WAL appended from: {WALPath}.");
+                            }
+                        }
+                    }
                 }
             }
-
-            // sb is used for error and success here may be just print is better.
-
-            if (sb.Length > 0)
-                ErrorMessage = sb.ToString();
 
             putCommand.SetAction(parseResult =>
             {
@@ -296,7 +329,7 @@ namespace kv_store
                 var path = parseResult.GetValue(pathArgument);
                 if (string.IsNullOrWhiteSpace(path))
                 {
-                    errCode = Engine.LoadSnapshot();
+                    errCode = Engine.LoadSnapshot(SnapshotPath);
                 }
                 else
                 {

@@ -24,6 +24,22 @@ Snapshotting bounds log growth.
 > Values are opaque byte arrays on disk; the CLI offers a best-effort UTF-8 view
 > (`get`) or a raw hex view (`gethex`), but the storage layer is schema-free.
 
+## Configuration
+
+- **`--data-dir <dir>` / `-d <dir>`** — data directory holding `wal_log` and
+  `snapshot.dat`. Defaults to `./data`. Supplied once at startup, **before** any
+  REPL command:
+
+  ```
+  $ dotnet run -- --data-dir /tmp/kv
+  > put k v
+  > get k
+  ```
+
+  The directory is created if missing. Both on-disk files are derived from it
+  via `Path.Combine`; the value is read once and reused for the whole session —
+  it is not a per-command option.
+
 ## Architecture
 
 ```mermaid
@@ -63,15 +79,17 @@ flowchart TB
 - **delete(key):** append DELETE record to WAL → remove from dict.
 - **get / gethex(key):** read in-memory dict only (the log is never consulted on
   the read path).
-- **startup:** if `snapshot.dat` exists, load it; if `wal_log` exists, replay
-  its records into the store (snapshot first, log on top).
+- **startup:** resolve `<data-dir>/snapshot.dat` and `<data-dir>/wal_log`; if the
+  snapshot exists, load it; if the log exists, replay its records into the store
+  (snapshot first, log on top).
 - **snapshot save:** serialize store → truncate WAL (all state now in the
   snapshot).
 - **replay:** re-apply WAL records into the store on demand.
 
 ## On-Disk WAL Format
 
-Each record is written to `wal_log` as a CRC followed by a length-prefixed body:
+Each record is written to `<data-dir>/wal_log` as a CRC followed by a
+length-prefixed body:
 
 ```
 [4: CRC32 of body]
@@ -100,7 +118,7 @@ op   key="name"   vlen=2        value="hi"
 
 ## Snapshot Format
 
-Written with `BinaryWriter` to `snapshot.dat`:
+Written with `BinaryWriter` to `<data-dir>/snapshot.dat`:
 
 ```
 [Int32: entry count]

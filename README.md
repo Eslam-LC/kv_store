@@ -18,6 +18,7 @@ not grow without bound.
 - **Binary values** — store and retrieve raw bytes in hex via `puthex`/`gethex`,
   or a `0x` prefix in `put`.
 - **Text values** — view stored bytes as UTF-8 via `get`.
+- **Configurable storage** — point the WAL and snapshot anywhere with `--data-dir`; the directory is auto-created.
 - **Minimal footprint** — only System.CommandLine and System.IO.Hashing; no database engine.
 
 ## Requirements
@@ -33,6 +34,18 @@ dotnet run
 
 Run from the project root so the default `./data` paths resolve. When debugging,
 point your debugger's working directory at the project root.
+
+### Configurable data directory
+
+By default the store keeps its WAL and snapshot in `./data`. Point it elsewhere
+once at startup with `--data-dir` (or `-d`); the directory is created if missing:
+
+```bash
+dotnet run -- --data-dir /tmp/kv
+```
+
+The option applies to the whole session — subsequent REPL commands
+(`put`, `get`, `snapshot save`, ...) use that directory without re-specifying it.
 
 ## Usage
 
@@ -80,9 +93,11 @@ Thank you for using the application.
 
 ### Crash Recovery
 
-Startup loads `./data/snapshot.dat` (if present), then replays `./data/wal_log`
-(if present) on top. Because the log is truncated after a snapshot is saved, the
-snapshot plus subsequent log entries reconstruct the full state.
+Startup loads `<data-dir>/snapshot.dat` (if present), then replays
+`<data-dir>/wal_log` (if present) on top. Because the log is truncated after a
+snapshot is saved, the snapshot plus subsequent log entries reconstruct the
+full state. With the default data directory these are `./data/snapshot.dat` and
+`./data/wal_log`.
 
 Recovery is **not** automatic on interactive `snapshot load` — use `replay`
 explicitly to append WAL records after loading a snapshot. `replay` is also
