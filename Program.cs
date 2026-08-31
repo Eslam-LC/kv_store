@@ -153,17 +153,14 @@ namespace kv_store
                     Console.WriteLine();
                     if (key.KeyChar == 'y')
                     {
-                        if (valid)
+                        errCode = Engine.ReplayRecords();
+                        if (errCode != ErrorCode.None)
                         {
-                            errCode = Engine.ReplayRecords();
-                            if (errCode != ErrorCode.None)
-                            {
-                                Console.WriteLine($"Error: {errCode.GetDescription()}");
-                            }
-                            else
-                            {
-                                Console.WriteLine($"WAL appended from: {WALPath}.");
-                            }
+                            Console.WriteLine($"Error: {errCode.GetDescription()}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"WAL appended from: {WALPath}.");
                         }
                     }
                 }
@@ -357,7 +354,7 @@ namespace kv_store
 
             exitCommand.SetAction(parseResult =>
             {
-                ExecuteExitRoutine(args);
+                ExecuteExitRoutine();
             });
 
             while (true)
@@ -429,9 +426,9 @@ namespace kv_store
             return Encoding.UTF8.GetString(ba);
         }
 
-        static void ExecuteExitRoutine(string[] args)
+        static void ExecuteExitRoutine()
         {
-            string appName = args?.Length > 0 ? args[0] : "the application";
+            string appName = AppDomain.CurrentDomain.FriendlyName ?? "the application";
             Console.WriteLine($"Thank you for using {appName}");
             Environment.Exit(0);
         }

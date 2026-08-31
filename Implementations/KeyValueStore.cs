@@ -66,7 +66,7 @@ namespace kv_store.Implementations
             if (success)
                 return ErrorCode.None;
             else
-                return ErrorCode.KeyNotValid;
+                return ErrorCode.KeyNotFound;
         }
 
         public ErrorCode GetReadOnly(out ReadOnlyDictionary<string, byte[]> keyValuePairs)
