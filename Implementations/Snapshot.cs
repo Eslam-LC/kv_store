@@ -29,7 +29,7 @@ namespace kv_store.Implementations
                 using var snapshotFile = new FileStream(path, FileMode.Create, FileAccess.Write);
                 using var binaryWriter = new BinaryWriter(snapshotFile);
 
-                binaryWriter.Write(roDict.Count);
+                binaryWriter.Write(store.Count); // deliberatly not using roDict.Count() to avoid unecessary O(n) traverse over the enumerable
                 foreach (var entry in roDict)
                 {
                     binaryWriter.Write(entry.Key);

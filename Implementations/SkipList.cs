@@ -13,19 +13,30 @@ class QuadNode<TKey, TValue>(TKey key, TValue value, int level)
 public class SkipList<TKey, TValue>(int MaxLevel = 20) : IEnumerable<KeyValuePair<TKey, TValue>>
     where TKey : IComparable<TKey>
 {
-    readonly int _maxLevel = MaxLevel;
+    // readonly int _maxLevel = MaxLevel;
     readonly QuadNode<TKey, TValue> _head = new(default!, default!, MaxLevel);
     private readonly Random random = new();
     private bool Flip => random.NextDouble() > 0.5;
 
+    public SkipList(IDictionary<TKey, TValue> dict, int MaxLevel = 20)
+        : this(MaxLevel)
+    {
+        foreach (var item in dict)
+        {
+            Insert(item.Key, item.Value);
+        }
+    }
+
     public bool Insert(TKey key, TValue value)
     {
+        if (key == null || value == null)
+            return false;
         if (!TryGetNode(key, out var existing, out var update))
         {
-            int level = 0;
+            int level = 1;
             while (Flip)
                 ++level;
-            level = level < _maxLevel ? level : _maxLevel;
+            level = level < MaxLevel ? level : MaxLevel;
 
             QuadNode<TKey, TValue> newNode = new(key, value, level);
             for (int i = 0; i < level; i++)
@@ -47,7 +58,7 @@ public class SkipList<TKey, TValue>(int MaxLevel = 20) : IEnumerable<KeyValuePai
         return ret;
     }
 
-    public bool Delete(TKey key)
+    public bool Remove(TKey key)
     {
         if (TryGetNode(key, out var currentNode, out var update))
         {
@@ -85,11 +96,22 @@ public class SkipList<TKey, TValue>(int MaxLevel = 20) : IEnumerable<KeyValuePai
         return retList;
     }
 
+    public TValue? this[TKey key]
+    {
+        get
+        {
+            if (TryGetValue(key, out var value))
+                return value;
+            return default;
+        }
+        set { var _ = Insert(key, value!); }
+    }
+
     bool FindFirstAtOrAfter(TKey key, out QuadNode<TKey, TValue>? outNode)
     {
         var current = _head;
 
-        for (int i = _maxLevel - 1; i >= 0; i--)
+        for (int i = MaxLevel - 1; i >= 0; i--)
         {
             while (
                 current!.ForwardPointers[i] != null
@@ -111,10 +133,10 @@ public class SkipList<TKey, TValue>(int MaxLevel = 20) : IEnumerable<KeyValuePai
     )
     {
         var current = _head;
-        update = new QuadNode<TKey, TValue>[_maxLevel];
+        update = new QuadNode<TKey, TValue>[MaxLevel];
         currentNode = null;
 
-        for (int i = _maxLevel - 1; i >= 0; i--)
+        for (int i = MaxLevel - 1; i >= 0; i--)
         {
             while (
                 current!.ForwardPointers[i] != null

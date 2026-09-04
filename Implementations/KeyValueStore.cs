@@ -9,7 +9,7 @@ namespace kv_store.Implementations
 {
     class KeyValueStore
     {
-        Dictionary<string, byte[]> kvStore = [];
+        SkipList<string, byte[]> kvStore = new();
 
         public ErrorCode Put(string key, byte[] value)
         {
@@ -69,11 +69,13 @@ namespace kv_store.Implementations
                 return ErrorCode.KeyNotFound;
         }
 
-        public ErrorCode GetReadOnly(out ReadOnlyDictionary<string, byte[]> keyValuePairs)
+        public ErrorCode GetReadOnly(out IEnumerable<KeyValuePair<string, byte[]>> keyValuePairs)
         {
-            keyValuePairs = kvStore.AsReadOnly();
+            keyValuePairs = kvStore;
             return ErrorCode.None;
         }
+
+        public int Count => kvStore.Count;
 
         public ErrorCode Clear()
         {
