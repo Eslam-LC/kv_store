@@ -34,6 +34,17 @@ public class SkipListTests
     }
 
     [Fact]
+    public void Indexer_Setter_InsertsThroughPutPath()
+    {
+        var list = new SkipList<string, int>();
+        list["a"] = 1;
+        Assert.Equal(1, list.Count);
+        Assert.Equal(1, list["a"]);
+        Assert.True(list.TryGetValue("a", out var value));
+        Assert.Equal(1, value);
+    }
+
+    [Fact]
     public void Insert_ManyOutOfOrder_AllRetrievable()
     {
         var list = new SkipList<int, string>();
@@ -51,6 +62,14 @@ public class SkipListTests
     {
         var list = new SkipList<string, string>();
         Assert.False(list.Insert(null!, "v"));
+        Assert.Equal(0, list.Count);
+    }
+
+    [Fact]
+    public void Insert_NullValue_ReturnsFalse()
+    {
+        var list = new SkipList<string, string>();
+        Assert.False(list.Insert("k", null!));
         Assert.Equal(0, list.Count);
     }
 
@@ -196,8 +215,11 @@ public class SkipListTests
     public void Scan_EndSmallerThanStart_ReturnsEmpty()
     {
         var list = new SkipList<int, int>();
-        list.Insert(1, 1);
-        Assert.Empty(list.Scan(5, 2));
+        // Both endpoints exist and are within the list; only the ordering is wrong.
+        for (int i = 0; i < 10; i++)
+            list.Insert(i, i);
+
+        Assert.Empty(list.Scan(7, 3));
     }
 
     // ----- Enumeration order -----
