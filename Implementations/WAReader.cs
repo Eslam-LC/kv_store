@@ -8,32 +8,37 @@ namespace kv_store.Implementations
 {
     public class WAReader
     {
-        string? _path;
-        public string? Path => _path;
+        string? _path = @"./data/wal_log";
 
-        public ErrorCode Initialize(string path = @"./data/wal_log")
+        public ErrorCode Init(string LogPath)
         {
-            var errCode = IsFileExist(path, out bool valid);
-            if (!valid)
-                return errCode;
+            var valid = File.Exists(LogPath);
+            try
+            {
+                if (!valid)
+                    File.Create(LogPath).Dispose();
 
-            _path = path;
-
-            return ErrorCode.None;
-        }
-
-        private static ErrorCode IsFileExist(string _path, out bool valid)
-        {
-            valid = false;
-            bool pathInvalid = string.IsNullOrWhiteSpace(_path);
-            if (pathInvalid)
+                _path = LogPath;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return ErrorCode.AccessDenied;
+            }
+            catch (Exception ex)
+                when (ex
+                        is PathTooLongException
+                            or ArgumentException
+                            or NotSupportedException
+                            or DirectoryNotFoundException
+                )
+            {
                 return ErrorCode.InvalidPath;
+            }
+            catch (IOException)
+            {
+                return ErrorCode.IOError;
+            }
 
-            bool fileExists = File.Exists(_path);
-            if (!fileExists)
-                return ErrorCode.InvalidPath;
-
-            valid = true;
             return ErrorCode.None;
         }
 
@@ -42,43 +47,20 @@ namespace kv_store.Implementations
             records = [];
             if (string.IsNullOrWhiteSpace(_path))
                 return ErrorCode.UnInitializedInstance;
-            var buffer = new byte[4];
-            int bytesRead;
+
             try
             {
                 using var logFile = new FileStream(_path, FileMode.Open, FileAccess.Read);
+                if (logFile.Length == 0)
+                    return ErrorCode.FileIsEmpty;
                 using var binaryReader = new BinaryReader(logFile);
                 do
                 {
-                    bytesRead = binaryReader.Read(buffer, 0, buffer.Length);
-                    if (bytesRead == 0)
-                        break;
-                    byte[] hash = [.. buffer];
-
-                    bytesRead = binaryReader.Read(buffer, 0, buffer.Length);
-                    if (bytesRead == 0)
-                        break;
-                    int RecordLength = BitConverter.ToInt32(buffer);
-
-                    var bytes = new byte[RecordLength];
-                    bytesRead = binaryReader.Read(bytes, 0, bytes.Length);
-                    if (bytesRead < bytes.Length)
-                        return ErrorCode.CorruptedEntry;
-
-                    var errCode = WARecord.GetFromBytes(bytes, out WARecord? _record);
+                    ErrorCode errCode = WARecord.Unframe(binaryReader, out var record);
                     if (errCode != ErrorCode.None)
                         return errCode;
 
-                    WARecord record;
-                    if (_record == null)
-                        return ErrorCode.UnexpectedError;
-                    else
-                        record = (WARecord)_record;
-
-                    if (!record.Crc32Hash.SequenceEqual(hash))
-                        return ErrorCode.CorruptedEntry;
-
-                    records.Add(record);
+                    records.Add(record!.Value);
                 } while (logFile.Position < logFile.Length);
             }
             catch (EndOfStreamException)

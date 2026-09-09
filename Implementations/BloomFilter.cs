@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+using System.Text;
 using kv_store.Enums;
 using static kv_store.Implementations.BitArrayManipulator;
 
@@ -22,6 +19,8 @@ namespace kv_store.Implementations
         public static ulong G(ReadOnlySpan<byte> bytes, int i, long m) =>
             (H1(bytes) + (ulong)i * H2(bytes)) % (ulong)m;
 
+        public static ulong G(ulong h1, ulong h2, int i, long m) => (h1 + (ulong)i * h2) % (ulong)m;
+
         public static long BestM(long n, double p)
         {
             // m = -ln(p) * n / ln(2)^2
@@ -39,9 +38,12 @@ namespace kv_store.Implementations
     {
         readonly long bitSize;
         readonly int hashCount;
+
+        public long BitSize => bitSize;
+        public int HashCount => hashCount;
         readonly BitArrayManipulator? bitArray;
 
-        public BloomFilter(int estimatedItemCount, double desiredFalsePositiveRate = 0.01)
+        public BloomFilter(long estimatedItemCount, double desiredFalsePositiveRate = 0.01)
         {
             bitSize = HashHelper.BestM(estimatedItemCount, desiredFalsePositiveRate);
             hashCount = HashHelper.BestK(estimatedItemCount, bitSize);
@@ -52,12 +54,18 @@ namespace kv_store.Implementations
         {
             if (bitArray == null)
                 return ErrorCode.UnInitializedInstance;
-
+            var H1 = HashHelper.H1(key);
+            var H2 = HashHelper.H2(key);
             for (int i = 0; i < hashCount; i++)
             {
-                bitArray.Set(HashHelper.G(key, i, bitSize));
+                bitArray.Set(HashHelper.G(H1, H2, i, bitSize));
             }
             return ErrorCode.None;
+        }
+
+        public ErrorCode Add(string key)
+        {
+            return Add(Encoding.UTF8.GetBytes(key));
         }
 
         public ErrorCode Contains(ReadOnlySpan<byte> key, out bool MayExist)
@@ -67,10 +75,11 @@ namespace kv_store.Implementations
                 MayExist = true;
                 return ErrorCode.UnInitializedInstance;
             }
-
+            var H1 = HashHelper.H1(key);
+            var H2 = HashHelper.H2(key);
             for (int i = 0; i < hashCount; i++)
             {
-                if (!bitArray.Get(HashHelper.G(key, i, bitSize)))
+                if (!bitArray.Get(HashHelper.G(H1, H2, i, bitSize)))
                 {
                     MayExist = false;
                     return ErrorCode.None;
@@ -78,6 +87,11 @@ namespace kv_store.Implementations
             }
             MayExist = true;
             return ErrorCode.None;
+        }
+
+        public ErrorCode Contains(string key, out bool MayExist)
+        {
+            return Contains(Encoding.UTF8.GetBytes(key), out MayExist);
         }
 
         public byte[]? GetBytes => bitArray?.Serialize;
@@ -108,6 +122,11 @@ namespace kv_store.Implementations
                 }
                 MayExist = true;
                 return ErrorCode.None;
+            }
+
+            public ErrorCode Contains(string key, out bool MayExist)
+            {
+                return Contains(Encoding.UTF8.GetBytes(key), out MayExist);
             }
         }
     }

@@ -19,6 +19,9 @@ namespace kv_store.Enums
         [Description("Entry is empty")]
         EntryIsEmpty,
 
+        [Description("File is empty")]
+        FileIsEmpty,
+
         [Description("The specified path is invalid")]
         InvalidPath,
 
@@ -45,5 +48,14 @@ namespace kv_store.Enums
 
         [Description("An unexpected error occurred")]
         UnexpectedError,
+
+        [Description("Immutable instance can't be written to")]
+        WriteToImmutableInstance,
+
+        [Description("File Corrupted Or Unsupported Version")]
+        FileCorruptedOrUnsupportedVersion,
+
+        [Description("An Error Occurred while loading SSTables")]
+        ErrorInSSTablesLoading,
     }
 }

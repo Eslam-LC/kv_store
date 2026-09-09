@@ -95,75 +95,40 @@ namespace kv_store
             if (!dir.Exists)
                 dir.Create();
 
-            var SnapshotPath = Path.Combine(dir.FullName, "snapshot.dat");
-            var WALPath = Path.Combine(dir.FullName, "wal_log");
-
-            var writer = new WAWriter();
-            errCode = writer.Initialize(WALPath);
-
-            var reader = new WAReader();
-            errCode = reader.Initialize(WALPath);
-
-            var store = new KeyValueStore();
-            var snapper = new Snapshot();
-
             var Engine = new WAEngine();
-            errCode = Engine.Initialize(writer, store, reader, snapper);
+            errCode = Engine.Init(out var errors, dir.FullName);
             if (errCode != ErrorCode.None)
-                Console.WriteLine($"engine initialization error: {errCode.GetDescription()}");
-
-            bool valid = File.Exists(SnapshotPath);
-
-            if (valid)
             {
-                errCode = Engine.LoadSnapshot(SnapshotPath);
-                if (errCode != ErrorCode.None)
+                if (errCode == ErrorCode.ErrorInSSTablesLoading)
                 {
-                    valid = false;
-                    Console.WriteLine($"Error: {errCode.GetDescription()}");
+                    foreach (var (e, f) in errors)
+                    {
+                        Console.WriteLine($"Error {e.GetDescription()} \nWhen loading file {f}");
+                    }
                 }
                 else
                 {
-                    Console.WriteLine($"snapshot loaded from: {SnapshotPath}.");
-                    valid = File.Exists(WALPath);
-
-                    if (valid)
-                    {
-                        errCode = Engine.ReplayRecords();
-                        if (errCode != ErrorCode.None)
-                        {
-                            Console.WriteLine($"Error: {errCode.GetDescription()}");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"WAL appended from: {WALPath}.");
-                        }
-                    }
+                    Console.WriteLine($"engine initialization error: {errCode.GetDescription()}");
                 }
             }
 
-            if (!valid)
+            var SnapshotPath = Path.Combine(dir.FullName, "snapshot.dat");
+            var WALPath = Path.Combine(dir.FullName, "wal_log");
+
+            if (File.Exists(SnapshotPath))
             {
-                if (File.Exists(WALPath))
-                {
-                    Console.Write(
-                        $"Snapshot file do not exist or failed to load. do you want to append WAL operations anyway (y/n)?"
+                errCode = Engine.LoadSnapshot(SnapshotPath);
+                if (errCode != ErrorCode.None && errCode != ErrorCode.FileIsEmpty)
+                    Console.WriteLine(
+                        $"Snapshot failed to load. Error: {errCode.GetDescription()}"
                     );
-                    var key = Console.ReadKey();
-                    Console.WriteLine();
-                    if (key.KeyChar == 'y')
-                    {
-                        errCode = Engine.ReplayRecords();
-                        if (errCode != ErrorCode.None)
-                        {
-                            Console.WriteLine($"Error: {errCode.GetDescription()}");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"WAL appended from: {WALPath}.");
-                        }
-                    }
-                }
+            }
+
+            if (File.Exists(WALPath))
+            {
+                errCode = Engine.ReplayRecords();
+                if (errCode != ErrorCode.None && errCode != ErrorCode.FileIsEmpty)
+                    Console.WriteLine($"WALog failed to load. Error: {errCode.GetDescription()}");
             }
 
             putCommand.SetAction(parseResult =>
@@ -336,6 +301,21 @@ namespace kv_store
                 {
                     ErrorMessage = $"Error: {errCode.GetDescription()}.";
                     return;
+                }
+                Console.Write($"do you want to append WAL operations? (y/n)");
+                var key = Console.ReadKey();
+                Console.WriteLine();
+                if (key.KeyChar == 'y' || key.Key == ConsoleKey.Enter)
+                {
+                    errCode = Engine.ReplayRecords();
+                    if (errCode != ErrorCode.None)
+                    {
+                        Console.WriteLine($"Error: {errCode.GetDescription()}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"WAL appended from: {WALPath}.");
+                    }
                 }
                 SuccessMessage = $"snapshot loaded.";
             });

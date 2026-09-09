@@ -6,16 +6,10 @@ namespace kv_store.Implementations
 {
     public record struct WARecord
     {
-        byte[] _Crc32Hash;
-
-        // int _RecordLength;
         WAOperation _Op;
         string _Key;
         int? _ValueLength;
         byte[]? _Value;
-        public readonly byte[] Crc32Hash => _Crc32Hash;
-
-        // public readonly int RecordLength => _RecordLength;
 
         public readonly WAOperation Op => _Op;
 
@@ -44,8 +38,6 @@ namespace kv_store.Implementations
 
             record = new()
             {
-                _Crc32Hash = [],
-                // _RecordLength = 1 + Encoding.UTF8.GetByteCount(key) + 4 + value?.Length ?? 0,
                 _Op = operation,
                 _Key = key,
                 _ValueLength = (operation == WAOperation.PUT) ? value?.Length : null,
@@ -55,8 +47,13 @@ namespace kv_store.Implementations
             return ErrorCode.None;
         }
 
-        public static ErrorCode GetInBytes(in WARecord record, out byte[]? bytes)
+        public static ErrorCode GetInBytes(
+            in WARecord record,
+            out byte[]? bytes,
+            bool IncludeOp = true
+        )
         {
+            // bytes = [ 1 byte : OP ][ UTF-8 encoded 7-bit length pre-fixed key ][ 4 bytes : value length ][ value length bytes : value ]
             bytes = null;
             if (string.IsNullOrWhiteSpace(record._Key))
             {
@@ -71,7 +68,7 @@ namespace kv_store.Implementations
             try
             {
                 using var memStream = new MemoryStream();
-                using var binaryWriter = new BinaryWriter(memStream);
+                using var binaryWriter = new BinaryWriter(memStream, Encoding.UTF8);
 
                 binaryWriter.Write((byte)record.Op);
                 binaryWriter.Write(record._Key);
@@ -105,12 +102,13 @@ namespace kv_store.Implementations
 
         public static ErrorCode GetFromBytes(in byte[] bytes, out WARecord? record)
         {
+            // bytes = [ 1 byte : OP ][ UTF-8 encoded 7-bit length pre-fixed key ][ 4 bytes : value length ][ value length bytes : value ]
             record = null;
             if (bytes == null)
                 return ErrorCode.EntryIsEmpty;
 
             using var memStream = new MemoryStream(bytes);
-            using var binaryReader = new BinaryReader(memStream);
+            using var binaryReader = new BinaryReader(memStream, Encoding.UTF8);
 
             try
             {
@@ -124,19 +122,17 @@ namespace kv_store.Implementations
                     return ErrorCode.CorruptedEntry;
 
                 var ValueLength = (Op == WAOperation.PUT) ? binaryReader.ReadInt32() : 0;
-                if (ValueLength < 0 || ValueLength > bytes.Length - 4 - 1 - KeyBytesRead)
+                if (
+                    ValueLength < 0
+                    || ValueLength
+                        > bytes.Length - (Op == WAOperation.PUT ? 4 : 0) - 1 - KeyBytesRead
+                )
                     return ErrorCode.CorruptedEntry;
 
                 var Value = (Op == WAOperation.PUT) ? binaryReader.ReadBytes(ValueLength) : null;
 
-                var errCode = GetCrc32Hash(bytes, out var CheckSum);
-                if (errCode != ErrorCode.None)
-                    return errCode;
-
                 record = new()
                 {
-                    _Crc32Hash = CheckSum,
-                    // _RecordLength = 1 + (int)KeyBytesRead + 4 + ValueLength,
                     _Op = Op,
                     _Key = Key,
                     _ValueLength = ValueLength,
@@ -176,9 +172,9 @@ namespace kv_store.Implementations
             return ErrorCode.None;
         }
 
-        public static ErrorCode GetInBytesWithHash(in WARecord record, out byte[]? bytesWithHash)
+        public static ErrorCode Frame(in WARecord record, out byte[]? framed)
         {
-            bytesWithHash = null;
+            framed = null;
             var errCode = GetInBytes(record, out var bytes);
             if (errCode != ErrorCode.None)
                 return errCode;
@@ -192,9 +188,55 @@ namespace kv_store.Implementations
             if (errCode != ErrorCode.None)
                 return errCode;
 
-            bytesWithHash = [.. CheckSum, .. bytesLength, .. bytes];
+            framed = [.. CheckSum, .. bytesLength, .. bytes];
 
             return ErrorCode.None;
+        }
+
+        public static ErrorCode Unframe(BinaryReader r, out WARecord? record)
+        {
+            record = null;
+            if (r == null)
+                return ErrorCode.UnInitializedInstance;
+
+            try
+            {
+                var crc = r.ReadBytes(4);
+                var RecordLength = BitConverter.ToInt32(r.ReadBytes(4));
+
+                if (RecordLength < 1 || r.BaseStream.Position + RecordLength > r.BaseStream.Length)
+                    return ErrorCode.CorruptedEntry;
+
+                var body = r.ReadBytes(RecordLength);
+                if (body.Length != RecordLength)
+                    return ErrorCode.CorruptedEntry;
+
+                var errCode = GetCrc32Hash(body, out var CheckSum);
+                if (errCode != ErrorCode.None)
+                    return errCode;
+
+                if (!CheckSum.SequenceEqual(crc))
+                    return ErrorCode.CorruptedEntry;
+
+                errCode = GetFromBytes(body, out record);
+                return errCode;
+            }
+            catch (ArgumentException)
+            {
+                return ErrorCode.CorruptedEntry;
+            }
+            catch (ObjectDisposedException)
+            {
+                return ErrorCode.UnInitializedInstance;
+            }
+            catch (IOException)
+            {
+                return ErrorCode.IOError;
+            }
+            catch
+            {
+                return ErrorCode.UnexpectedError;
+            }
         }
     }
 }

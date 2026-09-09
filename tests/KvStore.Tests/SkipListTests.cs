@@ -1,7 +1,7 @@
 using kv_store.Implementations;
 using Xunit;
 
-namespace SkipList.Tests;
+namespace KvStore.Tests;
 
 public class SkipListTests
 {

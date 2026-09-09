@@ -8,26 +8,46 @@ namespace kv_store.Implementations
 {
     public class WAWriter
     {
-        string? path;
-        public string? Path => path;
+        string? _path = @"./data/wal_log";
 
-        public ErrorCode Initialize(string LogPath = @"./data/wal_log")
+        public ErrorCode Init(string LogPath)
         {
-            bool IsEmpty = string.IsNullOrWhiteSpace(LogPath);
+            var valid = File.Exists(LogPath);
+            try
+            {
+                if (!valid)
+                    File.Create(LogPath).Dispose();
 
-            if (IsEmpty)
+                _path = LogPath;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return ErrorCode.AccessDenied;
+            }
+            catch (Exception ex)
+                when (ex
+                        is PathTooLongException
+                            or ArgumentException
+                            or NotSupportedException
+                            or DirectoryNotFoundException
+                )
+            {
                 return ErrorCode.InvalidPath;
+            }
+            catch (IOException)
+            {
+                return ErrorCode.IOError;
+            }
 
-            path = LogPath;
             return ErrorCode.None;
         }
 
         public ErrorCode Append(WARecord walRecord)
         {
-            if (string.IsNullOrWhiteSpace(path))
+            if (string.IsNullOrWhiteSpace(_path))
                 return ErrorCode.InvalidPath;
 
-            var errCode = WARecord.GetInBytesWithHash(walRecord, out byte[]? bytes);
+            var errCode = WARecord.Frame(walRecord, out byte[]? bytes);
             if (errCode != ErrorCode.None)
                 return errCode;
 
@@ -36,7 +56,7 @@ namespace kv_store.Implementations
 
             try
             {
-                using var loggerFile = new FileStream(path, FileMode.Append, FileAccess.Write);
+                using var loggerFile = new FileStream(_path, FileMode.Append, FileAccess.Write);
                 using var binaryWriter = new BinaryWriter(loggerFile);
                 binaryWriter.Write(bytes);
                 loggerFile.Flush(true);
@@ -63,12 +83,12 @@ namespace kv_store.Implementations
 
         public ErrorCode Truncate()
         {
-            if (string.IsNullOrWhiteSpace(path))
+            if (string.IsNullOrWhiteSpace(_path))
                 return ErrorCode.InvalidPath;
 
             try
             {
-                using var fileLogger = new FileStream(path, FileMode.Create, FileAccess.Write);
+                using var fileLogger = new FileStream(_path, FileMode.Create, FileAccess.Write);
             }
             catch (FileNotFoundException)
             {
