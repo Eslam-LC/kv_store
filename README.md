@@ -1,20 +1,28 @@
 # KV Store
 
-A crash-recoverable, in-memory key-value store with a Write-Ahead Log (WAL)
-and snapshotting, exposed through a REPL command-line interface.
+A crash-recoverable key-value store: an in-memory store backed by a Write-Ahead
+Log (WAL), snapshots, and immutable on-disk tables (SSTables), exposed through a
+REPL command-line interface.
 
 Keys are UTF-8 strings. Values are arbitrary byte arrays. A write-ahead log
 durably records every mutation before it is applied to memory; on startup the
 store replays the log to recover state. Snapshots compress the log so it does
-not grow without bound.
+not grow without bound. When the in-memory store crosses a size threshold it is
+frozen and flushed to a sorted, immutable SSTable, keeping the WAL append-only.
 
 ## Features
 
 - **Durability** — every `put`/`delete` is flushed to the WAL before it is acknowledged.
-- **Crash recovery** — on startup, load snapshot (if any), then replay the WAL.
-- **Integrity** — each WAL record carries a CRC32 checksum; truncated or corrupted
-  records are detected and reported.
+- **Crash recovery** — on startup, load snapshot (if any), replay the WAL, then
+  load existing SSTables (newest first).
+- **Integrity** — each WAL record and stored pair carries a CRC32 checksum;
+  truncated or corrupted records are detected and reported.
 - **Snapshotting** — `snapshot save` writes the full dataset and truncates the WAL.
+- **SSTable flushing** — writes are accumulated in memory; crossing a size
+  threshold freezes the store and flushes it to a sorted, immutable table
+  searchable via a bloom filter and sparse index.
+- **Corruption isolation** — a corrupted/unsupported SSTable is quarantined
+  (renamed `*.corrupt`) and reported; the rest of the store still loads.
 - **Binary values** — store and retrieve raw bytes in hex via `puthex`/`gethex`,
   or a `0x` prefix in `put`.
 - **Text values** — view stored bytes as UTF-8 via `get`.
@@ -93,11 +101,11 @@ Thank you for using the application.
 
 ### Crash Recovery
 
-Startup loads `<data-dir>/snapshot.dat` (if present), then replays
-`<data-dir>/wal_log` (if present) on top. Because the log is truncated after a
-snapshot is saved, the snapshot plus subsequent log entries reconstruct the
-full state. With the default data directory these are `./data/snapshot.dat` and
-`./data/wal_log`.
+Startup loads `<data-dir>/snapshot.dat` (if present), replays `<data-dir>/wal_log`
+(if present) on top, then loads every `SSTable-<5-digits>` file (newest first). The
+in-memory store, replayed WAL, and immutable tables together reconstruct the full
+state. With the default data directory these are `./data/snapshot.dat`,
+`./data/wal_log`, and `./data/SSTable-*`.
 
 Recovery is **not** automatic on interactive `snapshot load` — use `replay`
 explicitly to append WAL records after loading a snapshot. `replay` is also
@@ -108,7 +116,9 @@ available to re-apply the log on demand.
 - Single-process; no threading or concurrent access.
 - `get` decodes bytes as UTF-8; non-text data should be read with `gethex`.
 - A corrupt WAL halts recovery at the first bad record (no partial recovery).
-- No authentication, networking, or persistence beyond the WAL/snapshot files.
+- A corrupted/unsupported SSTable aborts `Init` only if it is not a quarantine-able
+  error; quarantine-able tables are moved to `*.corrupt` and skipped.
+- No authentication, networking, or persistence beyond the WAL/snapshot/SSTable files.
 
 ## Documentation
 
