@@ -58,7 +58,7 @@ flowchart TB
     Snap["Snapshot — persist"]
     Reader["WAReader — read + CRC"]
     SST["SSTable — write/read tables"]
-    Br["\"BloomFilter\" — membership\nSparseIndex — key→offset"]
+    Br["BloomFilter — membership<br/>SparseIndex — key→offset"]
 
     CLI --> Engine
     Engine --> Writer
