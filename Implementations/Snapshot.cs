@@ -8,27 +8,23 @@ namespace kv_store.Implementations
 {
     public class Snapshot
     {
-        public string SnapshotPath { get; set; } = @"./data/snapshot.dat";
-
-        public ErrorCode SaveSnapshot(in KeyValueStore store, string? path = null)
+        public static ErrorCode SaveSnapshot(BinaryWriter w, in KeyValueStore store)
         {
-            var path_ = path ?? SnapshotPath;
-            if (!Path.Exists(path_) || store == null)
-                return ErrorCode.UnInitializedInstance;
-
-            var errCode = store.GetReadOnly(out var roDict);
+            var errCode = store.GetImmutableKVList(out var ROKVL);
             if (errCode != ErrorCode.None)
                 return errCode;
 
             try
             {
-                using var snapshotFile = new FileStream(path_, FileMode.Create, FileAccess.Write);
-                using var binaryWriter = new BinaryWriter(snapshotFile);
-
-                binaryWriter.Write(store.Count); // deliberatly not using roDict.Count() to avoid unecessary O(n) traverse over the enumerable
-                foreach (var entry in roDict)
+                w.Write(store.Count); // deliberatly not using roDict.Count() to avoid unecessary O(n) traverse over the enumerable
+                foreach (var (key, value) in ROKVL)
                 {
-                    errCode = KVPairIO.WritePair(binaryWriter, entry.Key, entry.Value);
+                    errCode = WARecord.WriteFrame(
+                        w,
+                        value == null ? WAOperation.DELETE : WAOperation.PUT,
+                        key,
+                        value
+                    );
                     if (errCode != ErrorCode.None)
                         return errCode;
                 }
@@ -48,38 +44,29 @@ namespace kv_store.Implementations
             return ErrorCode.None;
         }
 
-        public ErrorCode LoadSnapshot(KeyValueStore store, string? path = null)
+        public static ErrorCode LoadSnapshot(BinaryReader r, KeyValueStore store)
         {
-            bool valid = File.Exists(SnapshotPath);
-
-            var path_ = path ?? SnapshotPath;
-            if (!Path.Exists(path_) || store == null)
-                return ErrorCode.UnInitializedInstance;
+            if (r.BaseStream.Length == 0)
+                return ErrorCode.FileIsEmpty;
 
             try
             {
-                Dictionary<string, byte[]> tempDict = [];
+                Dictionary<string, byte[]?> tempDict = [];
 
-                using var snapshotFile = new FileStream(path_, FileMode.Open, FileAccess.Read);
-                if (snapshotFile.Length == 0)
-                    return ErrorCode.FileIsEmpty;
-                using var binaryReader = new BinaryReader(snapshotFile);
-                int count = binaryReader.ReadInt32();
+                int count = r.ReadInt32();
                 while (count-- > 0)
                 {
-                    var errCode = KVPairIO.ReadPair(
-                        binaryReader,
+                    var errCode = WARecord.ReadFrame(
+                        r,
+                        out WAOperation? op,
                         out string? key,
                         out byte[]? value
                     );
                     if (errCode != ErrorCode.None)
                         return errCode;
 
-                    if (key == null || value == null)
-                    {
-                        Console.WriteLine($"Here is the Bug.");
+                    if (key == null || op == null)
                         return ErrorCode.UnexpectedError;
-                    }
 
                     if (tempDict.ContainsKey(key))
                         return ErrorCode.CorruptedEntry;

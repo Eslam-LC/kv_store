@@ -71,6 +71,7 @@ public class SparseIndexTests
 
         Assert.Equal(ErrorCode.CorruptedEntry, result);
         // entries parsed before the truncation survive; the trailing partial pair kills the read
+        Assert.True(read.TryGetValue("complete", out _));
         Assert.Equal(123L, read["complete"]);
     }
 

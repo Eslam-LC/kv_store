@@ -8,81 +8,37 @@ namespace kv_store.Implementations
 {
     public class WAReader
     {
-        string? _path = @"./data/wal_log";
-
-        public ErrorCode Init(string LogPath)
+        public static ErrorCode ReadRecords(BinaryReader r, in KeyValueStore kvs)
         {
-            var valid = File.Exists(LogPath);
-            try
-            {
-                if (!valid)
-                    File.Create(LogPath).Dispose();
+            if (r.BaseStream.Length == 0)
+                return ErrorCode.FileIsEmpty;
 
-                _path = LogPath;
-            }
-            catch (UnauthorizedAccessException)
+            do
             {
-                return ErrorCode.AccessDenied;
-            }
-            catch (Exception ex)
-                when (ex
-                        is PathTooLongException
-                            or ArgumentException
-                            or NotSupportedException
-                            or DirectoryNotFoundException
-                )
-            {
-                return ErrorCode.InvalidPath;
-            }
-            catch (IOException)
-            {
-                return ErrorCode.IOError;
-            }
+                ErrorCode errorCode = WARecord.ReadFrame(r, out var op, out var key, out var value);
+                if (errorCode != ErrorCode.None)
+                    return errorCode; // Maybe Handle Returns like engine??
 
-            return ErrorCode.None;
-        }
+                if (op == null || key == null || (op == WAOperation.PUT && value == null))
+                    return ErrorCode.UnexpectedError;
 
-        public ErrorCode ReadRecords(out ICollection<WARecord> records)
-        {
-            records = [];
-            if (string.IsNullOrWhiteSpace(_path))
-                return ErrorCode.UnInitializedInstance;
-
-            try
-            {
-                using var logFile = new FileStream(_path, FileMode.Open, FileAccess.Read);
-                if (logFile.Length == 0)
-                    return ErrorCode.FileIsEmpty;
-                using var binaryReader = new BinaryReader(logFile);
-                do
+                errorCode = op switch
                 {
-                    ErrorCode errCode = WARecord.Unframe(binaryReader, out var record);
-                    if (errCode != ErrorCode.None)
-                        return errCode;
+                    WAOperation.PUT => kvs.Put(key, value!),
+                    WAOperation.DELETE => kvs.Delete(key),
+                    _ => ErrorCode.InvalidOperation,
+                };
 
-                    records.Add(record!.Value);
-                } while (logFile.Position < logFile.Length);
-            }
-            catch (EndOfStreamException)
-            {
-                return ErrorCode.CorruptedEntry;
-            }
-            catch (FileNotFoundException)
-            {
-                return ErrorCode.InvalidPath;
-            }
-            catch (IOException)
-            {
-                return ErrorCode.IOError;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return ErrorCode.AccessDenied;
-            }
-            catch (Exception)
-            {
-                return ErrorCode.UnexpectedError;
-            }
+                if (errorCode == ErrorCode.KeyNotFound && op == WAOperation.DELETE)
+                {
+                    // if !FindKey return notFound.
+                    // remmember to write this type of entry (delete found keys that are not in memory) in sstable
+                    continue;
+                }
+
+                if (errorCode != ErrorCode.None)
+                    return errorCode;
+            } while (r.BaseStream.Position < r.BaseStream.Length);
 
             return ErrorCode.None;
         }

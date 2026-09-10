@@ -25,9 +25,9 @@ public class SSTableTests : IDisposable
         }
     }
 
-    static List<KeyValuePair<string, byte[]>> MakeEntries(int count)
+    static List<KeyValuePair<string, byte[]?>> MakeEntries(int count)
     {
-        var list = new List<KeyValuePair<string, byte[]>>(count);
+        var list = new List<KeyValuePair<string, byte[]?>>(count);
         for (int i = 0; i < count; i++)
         {
             list.Add(new($"key-{i:D3}", [(byte)i]));
@@ -43,7 +43,7 @@ public class SSTableTests : IDisposable
 
         Assert.Equal(
             ErrorCode.None,
-            SSTable.WriteTableToFile(path, entries, entries.Count, out var written)
+            SSTable.WriteTableToFile(path, new(entries), entries.Count, out var written)
         );
 
         Assert.Equal(ErrorCode.None, SSTable.ReadFileToTable(path, out var table));
@@ -59,7 +59,10 @@ public class SSTableTests : IDisposable
 
         for (int i = 0; i < entries.Count; i++)
         {
-            Assert.Equal(ErrorCode.None, KVPairIO.ReadPair(reader, out var key, out var value));
+            Assert.Equal(
+                ErrorCode.None,
+                WARecord.ReadFrame(reader, out _, out var key, out var value)
+            );
             Assert.Equal(entries[i].Key, key);
             Assert.Equal(entries[i].Value, value);
         }
@@ -71,7 +74,10 @@ public class SSTableTests : IDisposable
         var entries = MakeEntries(25);
         var path = Path.Combine(tempDir, "SSTable-00002");
 
-        Assert.Equal(ErrorCode.None, SSTable.WriteTableToFile(path, entries, entries.Count, out _));
+        Assert.Equal(
+            ErrorCode.None,
+            SSTable.WriteTableToFile(path, new(entries), entries.Count, out _)
+        );
         Assert.Equal(ErrorCode.None, SSTable.ReadFileToTable(path, out var table));
 
         using var stream = File.OpenRead(path);
@@ -85,7 +91,7 @@ public class SSTableTests : IDisposable
             reader.BaseStream.Seek(indexEntry.Value, SeekOrigin.Begin);
             Assert.Equal(
                 ErrorCode.None,
-                KVPairIO.ReadPair(reader, out var idxKey, out var idxValue)
+                WARecord.ReadFrame(reader, out _, out var idxKey, out var idxValue)
             );
             Assert.Equal($"key-{expectedIdx:D3}", idxKey);
             Assert.Equal(new byte[] { (byte)expectedIdx }, idxValue);
@@ -116,7 +122,10 @@ public class SSTableTests : IDisposable
     {
         var entries = MakeEntries(5);
         var path = Path.Combine(tempDir, "SSTable-00011");
-        Assert.Equal(ErrorCode.None, SSTable.WriteTableToFile(path, entries, entries.Count, out _));
+        Assert.Equal(
+            ErrorCode.None,
+            SSTable.WriteTableToFile(path, new(entries), entries.Count, out _)
+        );
 
         var bytes = File.ReadAllBytes(path);
         bytes[^1] = (byte)~bytes[^1]; // flip last byte of tail magic
@@ -140,11 +149,14 @@ public class SSTableTests : IDisposable
     [Fact]
     public void Scratch_NonStrideKey_Readable()
     {
-        var pairs = new List<KeyValuePair<string, byte[]>>();
+        var pairs = new List<KeyValuePair<string, byte[]?>>();
         for (int i = 0; i < 25; i++)
             pairs.Add(new($"k-{i:D3}", [(byte)i]));
         var path = Path.Combine(tempDir, "SSTable-00001");
-        Assert.Equal(ErrorCode.None, SSTable.WriteTableToFile(path, pairs, pairs.Count, out _));
+        Assert.Equal(
+            ErrorCode.None,
+            SSTable.WriteTableToFile(path, new(pairs), pairs.Count, out _)
+        );
         Assert.Equal(ErrorCode.None, SSTable.ReadFileToTable(path, out var table));
 
         foreach (var k in new[] { "k-000", "k-001", "k-009", "k-010", "k-015", "k-024" })
@@ -152,5 +164,40 @@ public class SSTableTests : IDisposable
             var e = table!.TryReadEntry(k, out _);
             Assert.True(e == ErrorCode.None, $"{k}: {e}");
         }
+    }
+
+    [Fact]
+    public void Tombstone_NullValue_StoredAsDeleteFrame_AndReadAsKeyDeleted()
+    {
+        var pairs = new List<KeyValuePair<string, byte[]?>>
+        {
+            new("k-000", [1]),
+            new("k-001", null),
+            new("k-002", [2]),
+        };
+        var path = Path.Combine(tempDir, "SSTable-00020");
+        Assert.Equal(
+            ErrorCode.None,
+            SSTable.WriteTableToFile(path, new(pairs), pairs.Count, out _)
+        );
+        Assert.Equal(ErrorCode.None, SSTable.ReadFileToTable(path, out var table));
+
+        using var stream = File.OpenRead(path);
+        using var reader = new BinaryReader(stream);
+        reader.ReadBytes(4); // header magic
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.Equal(
+                ErrorCode.None,
+                WARecord.ReadFrame(reader, out var op, out var key, out _)
+            );
+            Assert.Equal(key == "k-001" ? WAOperation.DELETE : WAOperation.PUT, op);
+        }
+
+        Assert.Equal(ErrorCode.KeyDeleted, table!.TryReadEntry("k-001", out _));
+        Assert.Equal(ErrorCode.None, table.TryReadEntry("k-000", out var v0));
+        Assert.Equal([1], v0);
+        Assert.Equal(ErrorCode.None, table.TryReadEntry("k-002", out var v2));
+        Assert.Equal([2], v2);
     }
 }

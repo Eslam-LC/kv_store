@@ -6,93 +6,42 @@ namespace kv_store.Implementations
 {
     public record struct WARecord
     {
-        WAOperation _Op;
-        string _Key;
-        int? _ValueLength;
-        byte[]? _Value;
-
-        public readonly WAOperation Op => _Op;
-
-        public readonly int KeyLength => Key.Length;
-
-        public readonly byte[] Key => Encoding.UTF8.GetBytes(_Key);
-
-        public readonly string KeyAsString => _Key;
-
-        public readonly int ValueLength => _ValueLength ?? 0;
-
-        public readonly byte[] Value => _Value ?? [];
-
-        public static ErrorCode GetRecord(
-            out WARecord record,
-            in WAOperation operation,
-            in string key,
-            in byte[]? value = null
+        public static ErrorCode WriteInBytes(
+            BinaryWriter w,
+            WAOperation op,
+            string key,
+            byte[]? value
         )
         {
-            if (value == null && operation == WAOperation.PUT)
-            {
-                record = new();
-                return ErrorCode.ValueNotValid;
-            }
-
-            record = new()
-            {
-                _Op = operation,
-                _Key = key,
-                _ValueLength = (operation == WAOperation.PUT) ? value?.Length : null,
-                _Value = (operation == WAOperation.PUT) ? value : null,
-            };
-
-            return ErrorCode.None;
-        }
-
-        public static ErrorCode GetInBytes(
-            in WARecord record,
-            out byte[]? bytes,
-            bool IncludeOp = true
-        )
-        {
-            // bytes = [ 1 byte : OP ][ UTF-8 encoded 7-bit length pre-fixed key ][ 4 bytes : value length ][ value length bytes : value ]
-            bytes = null;
-            if (string.IsNullOrWhiteSpace(record._Key))
+            // [ 1 byte : OP ][ UTF-8 encoded 7-bit length pre-fixed key ][ 4 bytes : value length ][ value length bytes : value ]
+            if (string.IsNullOrWhiteSpace(key))
             {
                 return ErrorCode.KeyNotValid;
             }
-            if (
-                record._Op == WAOperation.PUT
-                && (record._Value == null || record._ValueLength == null)
-            )
+            if (op == WAOperation.PUT && (value == null))
                 return ErrorCode.ValueNotValid;
 
             try
             {
-                using var memStream = new MemoryStream();
-                using var binaryWriter = new BinaryWriter(memStream, Encoding.UTF8);
-
-                binaryWriter.Write((byte)record.Op);
-                binaryWriter.Write(record._Key);
-                if (record.Op == WAOperation.PUT)
+                w.Write((byte)op);
+                w.Write(key);
+                if (op == WAOperation.PUT)
                 {
-                    binaryWriter.Write(record.ValueLength);
-                    binaryWriter.Write(record.Value);
+                    if (value == null)
+                        return ErrorCode.UnexpectedError;
+                    w.Write(value.Length);
+                    w.Write(value);
                 }
-
-                bytes = [.. memStream.ToArray()];
-            }
-            catch (FileNotFoundException)
-            {
-                return ErrorCode.InvalidPath;
             }
             catch (IOException)
             {
                 return ErrorCode.IOError;
             }
-            catch (UnauthorizedAccessException)
+            catch (ObjectDisposedException)
             {
-                return ErrorCode.AccessDenied;
+                return ErrorCode.UnInitializedInstance;
             }
-            catch (Exception)
+            catch
             {
                 return ErrorCode.UnexpectedError;
             }
@@ -100,128 +49,117 @@ namespace kv_store.Implementations
             return ErrorCode.None;
         }
 
-        public static ErrorCode GetFromBytes(in byte[] bytes, out WARecord? record)
+        public static ErrorCode WriteFrame(
+            BinaryWriter w,
+            WAOperation op,
+            string key,
+            byte[]? value
+        )
         {
-            // bytes = [ 1 byte : OP ][ UTF-8 encoded 7-bit length pre-fixed key ][ 4 bytes : value length ][ value length bytes : value ]
-            record = null;
-            if (bytes == null)
-                return ErrorCode.EntryIsEmpty;
+            ErrorCode errorCode;
+            if (op != WAOperation.PUT && op != WAOperation.DELETE)
+                return ErrorCode.InvalidOperation;
+            if (string.IsNullOrWhiteSpace(key))
+                return ErrorCode.KeyNotValid;
+            if (op == WAOperation.PUT && value == null)
+                return ErrorCode.ValueNotValid;
 
-            using var memStream = new MemoryStream(bytes);
-            using var binaryReader = new BinaryReader(memStream, Encoding.UTF8);
+            errorCode = GetCrc32Hash(op, key, value, out var CheckSum);
+            if (errorCode != ErrorCode.None)
+                return errorCode;
 
             try
             {
-                var Op = (WAOperation)binaryReader.ReadByte();
-
-                var p = memStream.Position;
-                var Key = binaryReader.ReadString();
-                var KeyBytesRead = memStream.Position - p;
-
-                if (Key.Length <= 0 || Key.Length > bytes.Length - 1 || Key.Length > int.MaxValue)
-                    return ErrorCode.CorruptedEntry;
-
-                var ValueLength = (Op == WAOperation.PUT) ? binaryReader.ReadInt32() : 0;
-                if (
-                    ValueLength < 0
-                    || ValueLength
-                        > bytes.Length - (Op == WAOperation.PUT ? 4 : 0) - 1 - KeyBytesRead
-                )
-                    return ErrorCode.CorruptedEntry;
-
-                var Value = (Op == WAOperation.PUT) ? binaryReader.ReadBytes(ValueLength) : null;
-
-                record = new()
-                {
-                    _Op = Op,
-                    _Key = Key,
-                    _ValueLength = ValueLength,
-                    _Value = Value,
-                };
+                w.Write(CheckSum);
             }
-            catch (EndOfStreamException)
+            catch (IOException)
+            {
+                return ErrorCode.IOError;
+            }
+            catch (ObjectDisposedException)
+            {
+                return ErrorCode.UnInitializedInstance;
+            }
+            catch
+            {
+                return ErrorCode.UnexpectedError;
+            }
+
+            errorCode = WriteInBytes(w, op, key, value);
+            if (errorCode != ErrorCode.None)
+                return errorCode;
+
+            return ErrorCode.None;
+        }
+
+        public static ErrorCode ReadFromBytes(
+            BinaryReader r,
+            out WAOperation? op,
+            out string? key,
+            out byte[]? value
+        )
+        {
+            op = null;
+            key = null;
+            value = null;
+            // [ 1 byte : OP ][ UTF-8 encoded 7-bit length pre-fixed key ][ 4 bytes : value length ][ value length bytes : value ]
+            try
+            {
+                op = (WAOperation)r.ReadByte();
+                key = r.ReadString();
+                value = (op == WAOperation.PUT) ? r.ReadBytes(r.ReadInt32()) : null;
+            }
+            catch (Exception ex) when (ex is EndOfStreamException or ArgumentException)
             {
                 return ErrorCode.CorruptedEntry;
             }
-            catch (FileNotFoundException)
-            {
-                return ErrorCode.InvalidPath;
-            }
             catch (IOException)
             {
                 return ErrorCode.IOError;
             }
-            catch (UnauthorizedAccessException)
+            catch (ObjectDisposedException)
             {
-                return ErrorCode.AccessDenied;
-            }
-            catch (Exception)
-            {
-                return ErrorCode.UnexpectedError;
-            }
-
-            return ErrorCode.None;
-        }
-
-        public static ErrorCode GetCrc32Hash(in byte[] sourceRecordInBytes, out byte[] destination)
-        {
-            destination = new byte[4];
-            var valid = Crc32.TryHash(sourceRecordInBytes, destination, out int _);
-            if (!valid)
-                return ErrorCode.UnExpectedHashingFailure;
-            return ErrorCode.None;
-        }
-
-        public static ErrorCode Frame(in WARecord record, out byte[]? framed)
-        {
-            framed = null;
-            var errCode = GetInBytes(record, out var bytes);
-            if (errCode != ErrorCode.None)
-                return errCode;
-
-            if (bytes == null)
-                return ErrorCode.UnexpectedError;
-
-            var bytesLength = BitConverter.GetBytes(bytes.Length);
-
-            errCode = GetCrc32Hash(bytes, out var CheckSum);
-            if (errCode != ErrorCode.None)
-                return errCode;
-
-            framed = [.. CheckSum, .. bytesLength, .. bytes];
-
-            return ErrorCode.None;
-        }
-
-        public static ErrorCode Unframe(BinaryReader r, out WARecord? record)
-        {
-            record = null;
-            if (r == null)
                 return ErrorCode.UnInitializedInstance;
+            }
+            catch
+            {
+                return ErrorCode.UnexpectedError;
+            }
 
+            return ErrorCode.None;
+        }
+
+        public static ErrorCode ReadFrame(
+            BinaryReader r,
+            out WAOperation? op,
+            out string? key,
+            out byte[]? value
+        )
+        {
+            op = null;
+            key = null;
+            value = null;
             try
             {
-                var crc = r.ReadBytes(4);
-                var RecordLength = BitConverter.ToInt32(r.ReadBytes(4));
+                ErrorCode errorCode;
 
-                if (RecordLength < 1 || r.BaseStream.Position + RecordLength > r.BaseStream.Length)
+                var crc = r.ReadUInt32();
+
+                errorCode = ReadFromBytes(r, out op, out key, out value);
+                if (errorCode != ErrorCode.None)
+                    return errorCode;
+
+                if (op == null || key == null || (op == WAOperation.PUT && value == null))
+                    return ErrorCode.UnexpectedError;
+
+                errorCode = GetCrc32Hash((WAOperation)op, key, value, out var crcHash);
+                if (errorCode != ErrorCode.None)
+                    return errorCode;
+
+                if (crcHash != crc)
                     return ErrorCode.CorruptedEntry;
-
-                var body = r.ReadBytes(RecordLength);
-                if (body.Length != RecordLength)
-                    return ErrorCode.CorruptedEntry;
-
-                var errCode = GetCrc32Hash(body, out var CheckSum);
-                if (errCode != ErrorCode.None)
-                    return errCode;
-
-                if (!CheckSum.SequenceEqual(crc))
-                    return ErrorCode.CorruptedEntry;
-
-                errCode = GetFromBytes(body, out record);
-                return errCode;
             }
-            catch (ArgumentException)
+            catch (Exception ex) when (ex is ArgumentException or EndOfStreamException)
             {
                 return ErrorCode.CorruptedEntry;
             }
@@ -237,6 +175,26 @@ namespace kv_store.Implementations
             {
                 return ErrorCode.UnexpectedError;
             }
+            return ErrorCode.None;
+        }
+
+        public static ErrorCode GetCrc32Hash(
+            WAOperation op,
+            string key,
+            byte[]? value,
+            out uint CrcHash
+        )
+        {
+            CrcHash = 0;
+            if (string.IsNullOrWhiteSpace(key) || (op == WAOperation.PUT && (value == null)))
+                return ErrorCode.InvalidArguments;
+
+            CrcHash = Crc32.HashToUInt32([
+                (byte)op,
+                .. Encoding.UTF8.GetBytes(key),
+                .. value ?? [],
+            ]);
+            return ErrorCode.None;
         }
     }
 }

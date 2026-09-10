@@ -4,7 +4,7 @@ namespace kv_store.Implementations
 {
     public class KeyValueStore
     {
-        SkipList<string, byte[]> KVList = new();
+        SkipList<string, byte[]?> KVList = new();
         long memoryStorage;
         public long MemoryStorage => memoryStorage;
         bool Mutable = true;
@@ -18,8 +18,10 @@ namespace kv_store.Implementations
             if (value == null)
                 return ErrorCode.ValueNotValid;
 
-            var _ = KVList.TryGetValue(key, out var old);
-            var deltaLength = old == null ? key.Length + value.Length : value.Length - old.Length;
+            var found = KVList.TryGetValue(key, out var oldValue);
+            var deltaLength = oldValue == null ? value.Length : value.Length - oldValue.Length;
+            if (!found)
+                deltaLength += key.Length;
             memoryStorage += deltaLength;
 
             KVList[key] = value;
@@ -27,7 +29,7 @@ namespace kv_store.Implementations
             return ErrorCode.None;
         }
 
-        public ErrorCode BulkInitialize(IDictionary<string, byte[]> dict)
+        public ErrorCode BulkInitialize(IDictionary<string, byte[]?> dict)
         {
             if (!Mutable)
                 return ErrorCode.WriteToImmutableInstance;
@@ -36,7 +38,7 @@ namespace kv_store.Implementations
             try
             {
                 KVList = new(dict);
-                memoryStorage = dict.Sum(kvp => kvp.Key.Length + kvp.Value.Length);
+                memoryStorage = dict.Sum(kvp => kvp.Key.Length + kvp.Value?.Length ?? 0);
             }
             catch
             {
@@ -45,18 +47,18 @@ namespace kv_store.Implementations
             return ErrorCode.None;
         }
 
-        public ErrorCode TryGet(string key, out byte[] value)
+        public ErrorCode TryGet(string key, out byte[]? value)
         {
             if (key == null)
             {
-                value = [];
+                value = null;
                 return ErrorCode.KeyNotValid;
             }
 
-            var success = KVList.TryGetValue(key, out value!);
+            var success = KVList.TryGetValue(key, out value);
 
             if (success)
-                return ErrorCode.None;
+                return (value != null) ? ErrorCode.None : ErrorCode.KeyDeleted;
             else
                 return ErrorCode.KeyNotFound;
         }
@@ -66,27 +68,23 @@ namespace kv_store.Implementations
             if (!Mutable)
                 return ErrorCode.WriteToImmutableInstance;
             if (key == null)
-            {
                 return ErrorCode.KeyNotValid;
-            }
 
-            var _ = KVList.TryGetValue(key, out var old);
-            var deltaLength = old == null ? 0 : -(key.Length + old.Length);
+            var found = KVList.TryGetValue(key, out var oldValue);
 
-            var success = KVList.Remove(key);
+            var deltaLength = oldValue == null ? 0 : -oldValue.Length;
+            if (!found)
+                deltaLength += key.Length;
+            memoryStorage += deltaLength;
 
-            if (success)
-            {
-                memoryStorage += deltaLength;
-                return ErrorCode.None;
-            }
-            else
-                return ErrorCode.KeyNotFound;
+            KVList[key] = null;
+
+            return ErrorCode.None;
         }
 
-        public ErrorCode GetReadOnly(out IEnumerable<KeyValuePair<string, byte[]>> keyValuePairs)
+        public ErrorCode GetImmutableKVList(out ImmutableSkipList<string, byte[]?> keyValuePairs)
         {
-            keyValuePairs = KVList;
+            keyValuePairs = new(KVList);
             return ErrorCode.None;
         }
 

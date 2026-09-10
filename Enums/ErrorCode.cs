@@ -57,5 +57,8 @@ namespace kv_store.Enums
 
         [Description("An Error Occurred while loading SSTables")]
         ErrorInSSTablesLoading,
+
+        [Description("Tombstone was returned")]
+        KeyDeleted,
     }
 }

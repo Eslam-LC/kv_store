@@ -1,4 +1,4 @@
-﻿using System.CommandLine;
+using System.CommandLine;
 using System.Text;
 using System.Text.RegularExpressions;
 using kv_store;
@@ -95,8 +95,8 @@ namespace kv_store
             if (!dir.Exists)
                 dir.Create();
 
-            var Engine = new WAEngine();
-            errCode = Engine.Init(out var errors, dir.FullName);
+            var Engine = new WAEngine(dir.FullName);
+            errCode = Engine.Init(out var errors);
             if (errCode != ErrorCode.None)
             {
                 if (errCode == ErrorCode.ErrorInSSTablesLoading)
@@ -117,7 +117,7 @@ namespace kv_store
 
             if (File.Exists(SnapshotPath))
             {
-                errCode = Engine.LoadSnapshot(SnapshotPath);
+                errCode = Engine.LoadSnapshot();
                 if (errCode != ErrorCode.None && errCode != ErrorCode.FileIsEmpty)
                     Console.WriteLine(
                         $"Snapshot failed to load. Error: {errCode.GetDescription()}"
@@ -226,7 +226,7 @@ namespace kv_store
                     ErrorMessage = $"Error: {errCode.GetDescription()}.";
                     return;
                 }
-                SuccessMessage = $"{key} : {PrintByteArrayAsString(value)}";
+                SuccessMessage = $"{key} : {PrintByteArrayAsString(value!)}";
             });
 
             getHexCommand.SetAction(parseResult =>
@@ -244,7 +244,7 @@ namespace kv_store
                     ErrorMessage = $"Error: {errCode.GetDescription()}.";
                     return;
                 }
-                SuccessMessage = $"{key} : {PrintByteArray(value)}";
+                SuccessMessage = $"{key} : {PrintByteArray(value!)}";
             });
 
             deleteCommand.SetAction(parseResult =>
@@ -269,14 +269,11 @@ namespace kv_store
             {
                 ErrorCode errCode;
                 var path = parseResult.GetValue(pathArgument);
-                if (string.IsNullOrWhiteSpace(path))
-                {
-                    errCode = Engine.SaveSnapshot();
-                }
-                else
-                {
-                    errCode = Engine.SaveSnapshot(path);
-                }
+                if (!string.IsNullOrWhiteSpace(path))
+                    Engine.SnapshotFile = path;
+
+                errCode = Engine.SaveSnapshot();
+
                 if (errCode != ErrorCode.None)
                 {
                     ErrorMessage = $"Error: {errCode.GetDescription()}.";
@@ -289,14 +286,11 @@ namespace kv_store
             {
                 ErrorCode errCode;
                 var path = parseResult.GetValue(pathArgument);
-                if (string.IsNullOrWhiteSpace(path))
-                {
-                    errCode = Engine.LoadSnapshot(SnapshotPath);
-                }
-                else
-                {
-                    errCode = Engine.LoadSnapshot(path);
-                }
+                if (!string.IsNullOrWhiteSpace(path))
+                    Engine.SnapshotFile = path;
+
+                errCode = Engine.LoadSnapshot();
+
                 if (errCode != ErrorCode.None)
                 {
                     ErrorMessage = $"Error: {errCode.GetDescription()}.";

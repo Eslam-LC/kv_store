@@ -105,7 +105,7 @@ namespace kv_store.Implementations
 
         public static ErrorCode WriteTableToFile(
             string path,
-            IEnumerable<KeyValuePair<string, byte[]>> keyValues,
+            in ImmutableSkipList<string, byte[]?> keyValues,
             int entriesCount,
             out ImmutableSSTable? immutableSSTable
         )
@@ -137,7 +137,12 @@ namespace kv_store.Implementations
 
                     sst.Footer_.RecordCount++;
 
-                    errorCode = KVPairIO.WritePair(w, entry.Key, entry.Value);
+                    errorCode = WARecord.WriteFrame(
+                        w,
+                        entry.Value == null ? WAOperation.DELETE : WAOperation.PUT,
+                        entry.Key,
+                        entry.Value!
+                    );
                     if (errorCode != ErrorCode.None)
                         return errorCode;
 
@@ -201,7 +206,7 @@ namespace kv_store.Implementations
         public class ImmutableSSTable(
             string FileName,
             byte[] MagicVersion,
-            SkipList<string, long> SparseIndex,
+            ImmutableSkipList<string, long> SparseIndex,
             byte[] FilterBytes,
             long BitSize,
             int HashCount,
@@ -212,7 +217,7 @@ namespace kv_store.Implementations
         {
             public string FileName_ = FileName;
             public readonly byte[] MagicVersion_ = MagicVersion;
-            public readonly SkipList<string, long> SparseIndex_ = SparseIndex;
+            public readonly ImmutableSkipList<string, long> SparseIndex_ = SparseIndex;
             public readonly ImmutableBloomFilter BloomFilter_ = new(
                 FilterBytes,
                 BitSize,
@@ -222,9 +227,9 @@ namespace kv_store.Implementations
             public readonly string LastKey_ = LastKey;
             public readonly long RecordCount_ = RecordCount;
 
-            public ErrorCode TryReadEntry(string key, out byte[] value)
+            public ErrorCode TryReadEntry(string key, out byte[]? value)
             {
-                value = [];
+                value = null;
                 ErrorCode errCode;
                 if (
                     key.CompareTo(FirstKey_, StringComparison.Ordinal) < 0
@@ -246,12 +251,22 @@ namespace kv_store.Implementations
                 using BinaryReader reader = new(stream);
 
                 reader.BaseStream.Seek(offset, SeekOrigin.Begin);
-                errCode = KVPairIO.ReadPair(reader, out string? fetchedKey, out value!);
-                value ??= [];
+                errCode = WARecord.ReadFrame(
+                    reader,
+                    out var op,
+                    out string? fetchedKey,
+                    out value!
+                );
+                if (value == null && op == WAOperation.PUT)
+                    value = [];
+
                 while (key.CompareTo(fetchedKey, StringComparison.Ordinal) > 0)
                 {
-                    errCode = KVPairIO.ReadPair(reader, out fetchedKey, out value!);
-                    value ??= [];
+                    errCode = WARecord.ReadFrame(reader, out op, out fetchedKey, out value!);
+                    if (value == null && op == WAOperation.PUT)
+                        value = [];
+                    if (errCode != ErrorCode.None)
+                        return errCode;
                 }
 
                 if (
@@ -260,6 +275,9 @@ namespace kv_store.Implementations
                     || fetchedKey.CompareTo(key, StringComparison.Ordinal) != 0
                 )
                     return ErrorCode.CorruptedEntry;
+
+                if (op == WAOperation.DELETE)
+                    return ErrorCode.KeyDeleted;
 
                 return ErrorCode.None;
             }
@@ -318,7 +336,7 @@ namespace kv_store.Implementations
                 errCode = SparseIndex.ReadIndex(
                     r,
                     Footer_.IndexLength,
-                    out SkipList<string, long> sparseIndex
+                    out ImmutableSkipList<string, long> sparseIndex
                 );
                 if (errCode != ErrorCode.None)
                     return errCode;

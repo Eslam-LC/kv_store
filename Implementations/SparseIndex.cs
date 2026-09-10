@@ -10,7 +10,7 @@ namespace kv_store.Implementations
     {
         readonly SkipList<string, long> entries = [];
 
-        public SkipList<string, long> GetEntries() => entries;
+        public ImmutableSkipList<string, long> GetEntries() => new(entries);
 
         public ErrorCode AddEntry(string key, long offset)
         {
@@ -18,7 +18,7 @@ namespace kv_store.Implementations
                 return ErrorCode.KeyNotValid;
             try
             {
-                entries.Insert(key, offset);
+                entries.Add(key, offset);
             }
             catch
             {
@@ -55,10 +55,15 @@ namespace kv_store.Implementations
         public static ErrorCode ReadIndex(
             BinaryReader r,
             int IndexLength,
-            out SkipList<string, long> keyOffsetPairs
+            out ImmutableSkipList<string, long> keyOffsetPairs
         )
         {
-            keyOffsetPairs = [];
+            /*
+            decions to make:
+                parsing index continue on failure?
+                parsing becomes an atomic operation either it's all there or not?
+            */
+            SkipList<string, long> tempList = [];
             long indexEnd = r.BaseStream.Position + IndexLength;
             try
             {
@@ -66,7 +71,7 @@ namespace kv_store.Implementations
                 {
                     var key = r.ReadString();
                     var offset = r.ReadInt64();
-                    var success = keyOffsetPairs.Insert(key, offset);
+                    var success = tempList.Add(key, offset);
                     if (!success)
                         return ErrorCode.UnexpectedError;
                 }
@@ -78,6 +83,10 @@ namespace kv_store.Implementations
             catch
             {
                 return ErrorCode.CorruptedEntry;
+            }
+            finally
+            {
+                keyOffsetPairs = new(tempList);
             }
             return ErrorCode.None;
         }
