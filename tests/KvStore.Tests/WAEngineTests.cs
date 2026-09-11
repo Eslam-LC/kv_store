@@ -65,7 +65,7 @@ public class WAEngineTests : IDisposable
     {
         var engine = new WAEngine(tempDir);
         Assert.Equal(ErrorCode.None, engine.Init(out _));
-        Assert.Equal(ErrorCode.KeyNotFound, engine.TryGet("nope", out _));
+        Assert.Equal(ErrorCode.KeyWasNotFound, engine.TryGet("nope", out _));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class WAEngineTests : IDisposable
         Assert.Equal(ErrorCode.None, engine.Init(out _));
         Assert.Equal(ErrorCode.None, engine.Put("d", [1]));
         Assert.Equal(ErrorCode.None, engine.Delete("d"));
-        Assert.Equal(ErrorCode.KeyNotFound, engine.TryGet("d", out _));
+        Assert.Equal(ErrorCode.KeyWasNotFound, engine.TryGet("d", out _));
         Assert.Equal(ErrorCode.None, engine.Delete("d")); // idempotent
     }
 
@@ -100,7 +100,7 @@ public class WAEngineTests : IDisposable
         Assert.Equal(ErrorCode.None, engine2.Init(out _));
         Assert.Equal(ErrorCode.None, engine2.ReplayRecords());
 
-        Assert.Equal(ErrorCode.KeyNotFound, engine2.TryGet("a", out _));
+        Assert.Equal(ErrorCode.KeyWasNotFound, engine2.TryGet("a", out _));
         Assert.Equal(ErrorCode.None, engine2.TryGet("b", out var vb));
         Assert.Equal([2], vb);
     }
@@ -145,10 +145,10 @@ public class WAEngineTests : IDisposable
         File.WriteAllBytes(table, [0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03]);
 
         var engine = new WAEngine(tempDir);
-        Assert.Equal(ErrorCode.ErrorInSSTablesLoading, engine.Init(out var errors));
+        Assert.Equal(ErrorCode.SstablesFailedToLoad, engine.Init(out var errors));
 
         var entry = Assert.Single(errors);
-        Assert.Equal(ErrorCode.FileCorruptedOrUnsupportedVersion, entry.e);
+        Assert.Equal(ErrorCode.FileIsCorruptedOrVersionUnsupported, entry.e);
         Assert.Equal(table, entry.f);
         Assert.False(File.Exists(table));
         Assert.True(File.Exists(table + ".corrupt"));
@@ -161,10 +161,10 @@ public class WAEngineTests : IDisposable
         File.WriteAllBytes(table, [0x53, 0x53, 0x54, 0x01, .. new byte[10]]);
 
         var engine = new WAEngine(tempDir);
-        Assert.Equal(ErrorCode.ErrorInSSTablesLoading, engine.Init(out var errors));
+        Assert.Equal(ErrorCode.SstablesFailedToLoad, engine.Init(out var errors));
 
         var entry = Assert.Single(errors);
-        Assert.Equal(ErrorCode.IOError, entry.e);
+        Assert.Equal(ErrorCode.InputOutputFailed, entry.e);
         Assert.Equal(table, entry.f);
         Assert.False(File.Exists(table));
         Assert.True(File.Exists(table + ".corrupt"));
@@ -196,10 +196,10 @@ public class WAEngineTests : IDisposable
         }
 
         var engine = new WAEngine(tempDir);
-        Assert.Equal(ErrorCode.CorruptedEntry, engine.Init(out var errors));
+        Assert.Equal(ErrorCode.EntryIsCorrupted, engine.Init(out var errors));
 
         var entry = Assert.Single(errors);
-        Assert.Equal(ErrorCode.CorruptedEntry, entry.e);
+        Assert.Equal(ErrorCode.EntryIsCorrupted, entry.e);
         Assert.Equal(table, entry.f);
         Assert.True(File.Exists(table)); // not renamed
     }
@@ -226,10 +226,10 @@ public class WAEngineTests : IDisposable
         File.WriteAllBytes(bad, [0xDE, 0xAD, 0xBE, 0xEF, 0x01]);
 
         var engine = new WAEngine(tempDir);
-        Assert.Equal(ErrorCode.ErrorInSSTablesLoading, engine.Init(out var errors));
+        Assert.Equal(ErrorCode.SstablesFailedToLoad, engine.Init(out var errors));
 
         var (e, f) = Assert.Single(errors);
-        Assert.Equal(ErrorCode.FileCorruptedOrUnsupportedVersion, e);
+        Assert.Equal(ErrorCode.FileIsCorruptedOrVersionUnsupported, e);
         Assert.Equal(bad, f);
 
         // corrupt one quarantined, good table still reachable
@@ -270,10 +270,7 @@ public class WAEngineTests : IDisposable
         Assert.Equal(ErrorCode.None, engine.Put("b", [2]));
         Assert.Equal(ErrorCode.None, engine.FlushToSSTable());
 
-        var tables = Directory
-            .GetFiles(tempDir, "SSTable-*")
-            .Select(Path.GetFileName)
-            .ToList();
+        var tables = Directory.GetFiles(tempDir, "SSTable-*").Select(Path.GetFileName).ToList();
         Assert.DoesNotContain("SSTable-TMP", tables);
         // two distinct numbered tables, monotonic serials (no -00000 collision)
         Assert.Equal(
@@ -318,7 +315,7 @@ public class WAEngineTests : IDisposable
         Assert.Equal(ErrorCode.None, engine.Put("k", big)); // flushed to SSTable
 
         engine.Delete("k"); // key only exists on disk, not in memory
-        Assert.Equal(ErrorCode.KeyNotFound, engine.TryGet("k", out _));
+        Assert.Equal(ErrorCode.KeyWasNotFound, engine.TryGet("k", out _));
     }
 
     [Fact]
@@ -336,7 +333,7 @@ public class WAEngineTests : IDisposable
 
         var engine2 = new WAEngine(tempDir);
         Assert.Equal(ErrorCode.None, engine2.Init(out _));
-        Assert.Equal(ErrorCode.KeyNotFound, engine2.TryGet("a", out _));
+        Assert.Equal(ErrorCode.KeyWasNotFound, engine2.TryGet("a", out _));
         Assert.Equal(ErrorCode.None, engine2.TryGet("b", out var vb));
         Assert.Equal([2], vb);
         Assert.Equal(ErrorCode.None, engine2.TryGet("big", out var vBig));
@@ -347,9 +344,9 @@ public class WAEngineTests : IDisposable
     public void Uninitialized_Ops_ReturnUnInitialized()
     {
         var engine = new WAEngine(tempDir);
-        Assert.Equal(ErrorCode.UnInitializedInstance, engine.Put("a", [1]));
-        Assert.Equal(ErrorCode.UnInitializedInstance, engine.TryGet("a", out _));
-        Assert.Equal(ErrorCode.UnInitializedInstance, engine.Delete("a"));
-        Assert.Equal(ErrorCode.UnInitializedInstance, engine.ReplayRecords());
+        Assert.Equal(ErrorCode.InstanceIsNotInitialized, engine.Put("a", [1]));
+        Assert.Equal(ErrorCode.InstanceIsNotInitialized, engine.TryGet("a", out _));
+        Assert.Equal(ErrorCode.InstanceIsNotInitialized, engine.Delete("a"));
+        Assert.Equal(ErrorCode.InstanceIsNotInitialized, engine.ReplayRecords());
     }
 }

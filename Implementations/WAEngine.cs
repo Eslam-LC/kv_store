@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
 using kv_store.Enums;
-using static kv_store.Implementations.SSTable;
+using static kv_store.Enums.ErrorCode;
+using static kv_store.Enums.MapExToEr;
+using static kv_store.Enums.WAOperation;
 
 namespace kv_store.Implementations
 {
@@ -8,56 +10,63 @@ namespace kv_store.Implementations
     the Engine may write to wal and fail to write to memory store which is to be expected.
     also it will log records with invalid keys.
     */
-    public partial class WAEngine(string FilesPath = "./data")
+    public partial class WAEngine(
+        string FilesPath = "./data",
+        string WALFileName = "wal.log",
+        string SnapshotFileName = "snapshot.dat",
+        string SSTableBaseName = "SSTable"
+    )
     {
+        // TODO Implement Scan Command, What does make since for a REPL program and what makes sense in general.
         KeyValueStore? MemStore;
         readonly List<KeyValueStore> Frozen_ = [];
 
         readonly List<ImmutableSSTable> immutableSSTables = [];
 
-        public string WALFile { get; set; } = Path.Combine(FilesPath, "wal_log");
-        public string SnapshotFile { get; set; } = Path.Combine(FilesPath, "snapshot.dat");
-        public string SSTFileBaseName { get; set; } = "SSTable";
+        public string WALFile { get; } = Path.Combine(FilesPath, WALFileName);
+        public string SnapshotFile { get; set; } = Path.Combine(FilesPath, SnapshotFileName);
+        public string SSTFileBaseName { get; } = SSTableBaseName;
 
         const long flushThresholdBytes = 32768;
+
+        [GeneratedRegex("^SSTable-([0-9]{5})$")]
+        private static partial Regex MyRegex();
 
         public ErrorCode Init(out List<(ErrorCode e, string? f)> errors)
         {
             errors = [];
-            if (!Path.Exists(FilesPath))
-            {
-                try
-                {
-                    Directory.CreateDirectory(FilesPath);
-                }
-                catch
-                {
-                    return ErrorCode.UnexpectedError;
-                }
-            }
-
-            try
-            {
-                if (!File.Exists(WALFile))
-                    File.Create(WALFile).Dispose();
-            }
-            catch
-            {
-                return ErrorCode.InvalidPath;
-            }
-            try
-            {
-                if (!File.Exists(SnapshotFile))
-                    File.Create(SnapshotFile).Dispose();
-            }
-            catch
-            {
-                return ErrorCode.InvalidPath;
-            }
 
             ErrorCode errorCode;
 
             MemStore = new();
+
+            try
+            {
+                if (!Path.Exists(FilesPath))
+                    Directory.CreateDirectory(FilesPath);
+
+                if (!File.Exists(WALFile))
+                    File.Create(WALFile).Dispose();
+
+                if (!File.Exists(SnapshotFile))
+                    File.Create(SnapshotFile).Dispose();
+
+                errorCode = LoadSnapshot();
+                if (errorCode != None && errorCode != FileIsEmpty)
+                    Console.WriteLine($"Snapshot failed to load. Error: {errorCode}");
+
+                errorCode = ReplayRecords();
+                if (errorCode != None && errorCode != FileIsEmpty)
+                    Console.WriteLine($"WALog failed to load. Error: {errorCode}");
+            }
+            catch (ArgumentException)
+            {
+                return PathIsInvalid;
+            }
+            catch (Exception ex)
+            {
+                return GetErrorCode(ex);
+            }
 
             var SSTablesFiles = Directory
                 .GetFiles(FilesPath, $"{SSTFileBaseName}-*")
@@ -70,22 +79,22 @@ namespace kv_store.Implementations
             {
                 try
                 {
-                    errorCode = SSTable.ReadFileToTable(filePath, out var immutableSSTable);
-                    if (errorCode != ErrorCode.None)
+                    errorCode = SSTable.ReadFromFileToTable(filePath, out var immutableSSTable);
+                    if (errorCode != None)
                     {
                         SSTablesLoadedSuccessfully = false;
                         errors.Add(new(errorCode, filePath));
 
                         if (
-                            errorCode != ErrorCode.FileCorruptedOrUnsupportedVersion
-                            && errorCode != ErrorCode.IOError
+                            errorCode != FileIsCorruptedOrVersionUnsupported
+                            && errorCode != InputOutputFailed
                         )
                             return errorCode;
 
                         File.Move(filePath, filePath + ".corrupt");
                     }
                     else if (immutableSSTable == null)
-                        return ErrorCode.UnexpectedError;
+                        return UnexpectedFailure;
                     else
                         immutableSSTables.Add(immutableSSTable);
                 }
@@ -98,37 +107,30 @@ namespace kv_store.Implementations
                                 or NotSupportedException
                     )
                 {
-                    return ErrorCode.InvalidPath;
+                    return PathIsInvalid;
                 }
                 catch (UnauthorizedAccessException)
                 {
-                    return ErrorCode.AccessDenied;
+                    return AccessDenied;
                 }
                 catch (IOException)
                 {
-                    return ErrorCode.IOError;
+                    return InputOutputFailed;
                 }
                 catch
                 {
-                    return ErrorCode.UnexpectedError;
+                    return UnexpectedFailure;
                 }
             }
             if (SSTablesLoadedSuccessfully)
-                return ErrorCode.None;
-            return ErrorCode.ErrorInSSTablesLoading;
+                return None;
+            return SstablesFailedToLoad;
         }
 
         public ErrorCode Put(string key, byte[] value)
         {
             if (MemStore == null)
-                return ErrorCode.UnInitializedInstance;
-
-            var record = new
-            {
-                op = WAOperation.PUT,
-                key,
-                val = value,
-            };
+                return InstanceIsNotInitialized;
 
             ErrorCode errorCode;
             try
@@ -136,25 +138,25 @@ namespace kv_store.Implementations
                 using FileStream stream = new(WALFile, FileMode.Append, FileAccess.Write);
                 using BinaryWriter writer = new(stream);
 
-                errorCode = WARecord.WriteFrame(writer, record.op, record.key, record.val);
-                if (errorCode != ErrorCode.None)
+                errorCode = WARecord.WriteFrame(writer, PUT, key, value);
+                if (errorCode != None)
                     return errorCode;
                 errorCode = MemStore.Put(key, value);
-                if (errorCode != ErrorCode.None)
+                if (errorCode != None)
                     return errorCode;
                 if (MemStore.MemoryStorage > flushThresholdBytes)
                 {
                     errorCode = FlushToSSTable();
-                    if (errorCode != ErrorCode.None)
+                    if (errorCode != None)
                         return errorCode;
                 }
             }
             catch
             {
-                return ErrorCode.InvalidPath;
+                return PathIsInvalid;
             }
 
-            return ErrorCode.None;
+            return None;
         }
 
         public ErrorCode TryGet(string key, out byte[]? value)
@@ -162,55 +164,48 @@ namespace kv_store.Implementations
             if (MemStore == null)
             {
                 value = null;
-                return ErrorCode.UnInitializedInstance;
+                return InstanceIsNotInitialized;
             }
 
             var errorCode = MemStore.TryGet(key, out value);
 
-            if (errorCode == ErrorCode.KeyNotFound)
+            if (errorCode == KeyWasNotFound)
             {
                 for (int i = Frozen_.Count - 1; i >= 0; i--)
                 {
                     KeyValueStore l = Frozen_[i];
                     errorCode = l.TryGet(key, out value);
-                    if (errorCode == ErrorCode.None)
+                    if (errorCode == None)
                         break;
-                    if (errorCode != ErrorCode.KeyNotFound)
+                    if (errorCode != KeyWasNotFound)
                         return errorCode;
                 }
                 foreach (var table in immutableSSTables)
                 {
                     errorCode = table.TryReadEntry(key, out value!);
-                    if (errorCode == ErrorCode.KeyNotFound)
+                    if (errorCode == KeyWasNotFound)
                         continue;
 
-                    if (errorCode == ErrorCode.KeyDeleted)
-                        return ErrorCode.KeyNotFound;
+                    if (errorCode == KeyWasDeleted)
+                        return KeyWasNotFound;
 
                     return errorCode;
                 }
             }
 
-            if (errorCode == ErrorCode.KeyDeleted)
-                return ErrorCode.KeyNotFound;
+            if (errorCode == KeyWasDeleted)
+                return KeyWasNotFound;
 
-            if (errorCode != ErrorCode.None)
+            if (errorCode != None)
                 return errorCode;
 
-            return ErrorCode.None;
+            return None;
         }
 
         public ErrorCode Delete(string key)
         {
             if (MemStore == null)
-                return ErrorCode.UnInitializedInstance;
-
-            var record = new
-            {
-                op = WAOperation.DELETE,
-                key,
-                value = Array.Empty<byte>(),
-            };
+                return InstanceIsNotInitialized;
 
             ErrorCode errorCode;
 
@@ -219,90 +214,95 @@ namespace kv_store.Implementations
                 using FileStream stream = new(WALFile, FileMode.Append, FileAccess.Write);
                 using BinaryWriter writer = new(stream);
 
-                errorCode = WARecord.WriteFrame(writer, record.op, record.key, record.value);
-                if (errorCode != ErrorCode.None)
+                errorCode = WARecord.WriteFrame(writer, DELETE, key, null);
+                if (errorCode != None)
                     return errorCode;
                 errorCode = MemStore.Delete(key);
-                if (errorCode != ErrorCode.None)
+                if (errorCode != None)
                     return errorCode;
             }
             catch (IOException)
             {
-                return ErrorCode.IOError;
+                return InputOutputFailed;
             }
             catch
             {
-                return ErrorCode.InvalidPath;
+                return PathIsInvalid;
             }
 
-            return ErrorCode.None;
+            return None;
         }
 
         public ErrorCode ReplayRecords()
         {
             if (MemStore == null)
-                return ErrorCode.UnInitializedInstance;
+                return InstanceIsNotInitialized;
             try
             {
                 using FileStream stream = new(WALFile, FileMode.Open, FileAccess.Read);
                 using BinaryReader reader = new(stream);
 
                 var errorCode = WAReader.ReadRecords(reader, MemStore);
-                if (errorCode != ErrorCode.None)
+                if (errorCode != None)
                     return errorCode;
             }
             catch (IOException)
             {
-                return ErrorCode.IOError;
+                return InputOutputFailed;
             }
             catch
             {
-                return ErrorCode.InvalidPath;
+                return PathIsInvalid;
             }
 
-            return ErrorCode.None;
+            return None;
         }
 
         public ErrorCode SaveSnapshot()
         {
             if (MemStore == null)
-                return ErrorCode.UnInitializedInstance;
+                return InstanceIsNotInitialized;
 
             if (string.IsNullOrWhiteSpace(SnapshotFile))
-                return ErrorCode.InvalidPath;
+                return PathIsInvalid;
+            {
+                using FileStream stream = new(
+                    SnapshotFile + "-tmp",
+                    FileMode.Create,
+                    FileAccess.Write
+                );
+                using BinaryWriter writer = new(stream);
 
-            using FileStream stream = new(SnapshotFile, FileMode.Create, FileAccess.Write);
-            using BinaryWriter writer = new(stream);
-
-            var errorCode = Snapshot.SaveSnapshot(writer, in MemStore);
-            if (errorCode != ErrorCode.None)
-                return errorCode;
-
+                var errorCode = Snapshot.SaveSnapshot(writer, MemStore);
+                if (errorCode != None)
+                    return errorCode;
+            }
             File.Create(WALFile).Dispose();
+            File.Move(SnapshotFile + "-tmp", SnapshotFile, true);
 
-            return ErrorCode.None;
+            return None;
         }
 
         public ErrorCode LoadSnapshot()
         {
             if (MemStore == null)
-                return ErrorCode.UnInitializedInstance;
+                return InstanceIsNotInitialized;
 
             if (string.IsNullOrWhiteSpace(SnapshotFile))
-                return ErrorCode.InvalidPath;
+                return PathIsInvalid;
 
             using FileStream stream = new(SnapshotFile, FileMode.Open, FileAccess.Read);
             using BinaryReader reader = new(stream);
             var errorCode = Snapshot.LoadSnapshot(reader, MemStore);
-            if (errorCode != ErrorCode.None)
+            if (errorCode != None)
                 return errorCode;
-            return ErrorCode.None;
+            return None;
         }
 
         public ErrorCode FlushToSSTable()
         {
             if (MemStore == null || FilesPath == null)
-                return ErrorCode.UnInitializedInstance;
+                return InstanceIsNotInitialized;
 
             ErrorCode errorCode;
 
@@ -310,7 +310,7 @@ namespace kv_store.Implementations
             Frozen_.Add(old);
             MemStore = new();
             errorCode = old.MakeImmutable();
-            if (errorCode != ErrorCode.None)
+            if (errorCode != None)
                 return errorCode;
 
             while (Frozen_.Count > 0)
@@ -319,16 +319,16 @@ namespace kv_store.Implementations
                 errorCode = old.GetImmutableKVList(
                     out ImmutableSkipList<string, byte[]?> keyValuePairs
                 );
-                if (errorCode != ErrorCode.None)
+                if (errorCode != None)
                     return errorCode;
                 if (keyValuePairs == null)
-                    return ErrorCode.UnexpectedError;
+                    return UnexpectedFailure;
 
                 uint SerialNumber = Directory
                     .GetFiles(FilesPath, $"{SSTFileBaseName}-*")
-                    .Select(f =>
-                        uint.TryParse(Path.GetFileName(f).Split('-')[^1], out uint n) ? n : 0
-                    )
+                    .Select(f => MyRegex().Match(Path.GetFileName(f)))
+                    .Where(m => m.Success)
+                    .Select(m => uint.TryParse(m.Groups[1].Value, out uint n) ? n : 0)
                     .DefaultIfEmpty(0u)
                     .Max();
 
@@ -346,39 +346,40 @@ namespace kv_store.Implementations
                         old.Count,
                         out ImmutableSSTable? ssTable
                     );
-                    if (errorCode != ErrorCode.None)
+                    if (errorCode != None)
                         return errorCode;
 
                     if (ssTable == null)
-                        return ErrorCode.UnexpectedError;
+                        return UnexpectedFailure;
 
-                    MoveSSTable(tmpPath, finalPath, ref ssTable);
+                    MoveSSTable(tmpPath, finalPath, ssTable);
 
                     immutableSSTables.Insert(0, ssTable);
                 }
-                catch
+                catch (ArgumentOutOfRangeException)
                 {
-                    return ErrorCode.UnexpectedError;
+                    return UnexpectedFailure;
+                }
+                catch (ArgumentException)
+                {
+                    return PathIsInvalid;
+                }
+                catch (Exception ex)
+                {
+                    return GetErrorCode(ex);
                 }
 
                 if (!Frozen_.Remove(old))
-                    return ErrorCode.UnexpectedError;
+                    return UnexpectedFailure;
             }
 
-            return ErrorCode.None;
+            return None;
         }
 
-        private static void MoveSSTable(
-            string tmpPath,
-            string finalPath,
-            ref ImmutableSSTable ssTable
-        )
+        private static void MoveSSTable(string tmpPath, string finalPath, ImmutableSSTable ssTable)
         {
             File.Move(tmpPath, finalPath);
-            ssTable.FileName_ = finalPath;
+            ssTable.FileName = finalPath;
         }
-
-        [GeneratedRegex("^SSTable-[0-9]{5}$")]
-        private static partial Regex MyRegex();
     }
 }

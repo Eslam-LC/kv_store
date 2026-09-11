@@ -24,7 +24,7 @@ public class SparseIndexTests
     {
         var index = new SparseIndex();
         var result = index.AddEntry(key!, 42);
-        Assert.Equal(ErrorCode.KeyNotValid, result);
+        Assert.Equal(ErrorCode.KeyIsInvalid, result);
         Assert.Empty(index.GetEntries());
     }
 
@@ -69,7 +69,7 @@ public class SparseIndexTests
         // claim a longer region so it tries to read past the truncated tail
         var result = SparseIndex.ReadIndex(r, (int)ms.Length + 100, out var read);
 
-        Assert.Equal(ErrorCode.CorruptedEntry, result);
+        Assert.Equal(ErrorCode.EntryIsCorrupted, result);
         // entries parsed before the truncation survive; the trailing partial pair kills the read
         Assert.True(read.TryGetValue("complete", out _));
         Assert.Equal(123L, read["complete"]);
@@ -79,6 +79,6 @@ public class SparseIndexTests
     public void WriteIndex_InvalidKeyEntries_ReturnsKeyNotValid()
     {
         var index = new SparseIndex();
-        Assert.Equal(ErrorCode.KeyNotValid, index.AddEntry(" ", 5));
+        Assert.Equal(ErrorCode.KeyIsInvalid, index.AddEntry(" ", 5));
     }
 }

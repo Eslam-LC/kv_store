@@ -1,54 +1,15 @@
+using System.Buffers;
 using System.IO.Hashing;
 using System.Text;
 using kv_store.Enums;
+using static kv_store.Enums.ErrorCode;
+using static kv_store.Enums.MapExToEr;
+using static kv_store.Enums.WAOperation;
 
 namespace kv_store.Implementations
 {
     public record struct WARecord
     {
-        public static ErrorCode WriteInBytes(
-            BinaryWriter w,
-            WAOperation op,
-            string key,
-            byte[]? value
-        )
-        {
-            // [ 1 byte : OP ][ UTF-8 encoded 7-bit length pre-fixed key ][ 4 bytes : value length ][ value length bytes : value ]
-            if (string.IsNullOrWhiteSpace(key))
-            {
-                return ErrorCode.KeyNotValid;
-            }
-            if (op == WAOperation.PUT && (value == null))
-                return ErrorCode.ValueNotValid;
-
-            try
-            {
-                w.Write((byte)op);
-                w.Write(key);
-                if (op == WAOperation.PUT)
-                {
-                    if (value == null)
-                        return ErrorCode.UnexpectedError;
-                    w.Write(value.Length);
-                    w.Write(value);
-                }
-            }
-            catch (IOException)
-            {
-                return ErrorCode.IOError;
-            }
-            catch (ObjectDisposedException)
-            {
-                return ErrorCode.UnInitializedInstance;
-            }
-            catch
-            {
-                return ErrorCode.UnexpectedError;
-            }
-
-            return ErrorCode.None;
-        }
-
         public static ErrorCode WriteFrame(
             BinaryWriter w,
             WAOperation op,
@@ -57,76 +18,36 @@ namespace kv_store.Implementations
         )
         {
             ErrorCode errorCode;
-            if (op != WAOperation.PUT && op != WAOperation.DELETE)
-                return ErrorCode.InvalidOperation;
+            if (op != PUT && op != DELETE)
+                return OperationIsInvalid;
             if (string.IsNullOrWhiteSpace(key))
-                return ErrorCode.KeyNotValid;
-            if (op == WAOperation.PUT && value == null)
-                return ErrorCode.ValueNotValid;
+                return KeyIsInvalid;
+            if (op == PUT && value == null)
+                return ValueIsInvalid;
 
             errorCode = GetCrc32Hash(op, key, value, out var CheckSum);
-            if (errorCode != ErrorCode.None)
+            if (errorCode != None)
                 return errorCode;
 
             try
             {
                 w.Write(CheckSum);
+                w.Write((byte)op);
+                w.Write(key);
+                if (op == PUT)
+                {
+                    if (value == null)
+                        return UnexpectedFailure;
+                    w.Write(value.Length);
+                    w.Write(value);
+                }
             }
-            catch (IOException)
+            catch (Exception ex)
             {
-                return ErrorCode.IOError;
-            }
-            catch (ObjectDisposedException)
-            {
-                return ErrorCode.UnInitializedInstance;
-            }
-            catch
-            {
-                return ErrorCode.UnexpectedError;
+                return GetErrorCode(ex);
             }
 
-            errorCode = WriteInBytes(w, op, key, value);
-            if (errorCode != ErrorCode.None)
-                return errorCode;
-
-            return ErrorCode.None;
-        }
-
-        public static ErrorCode ReadFromBytes(
-            BinaryReader r,
-            out WAOperation? op,
-            out string? key,
-            out byte[]? value
-        )
-        {
-            op = null;
-            key = null;
-            value = null;
-            // [ 1 byte : OP ][ UTF-8 encoded 7-bit length pre-fixed key ][ 4 bytes : value length ][ value length bytes : value ]
-            try
-            {
-                op = (WAOperation)r.ReadByte();
-                key = r.ReadString();
-                value = (op == WAOperation.PUT) ? r.ReadBytes(r.ReadInt32()) : null;
-            }
-            catch (Exception ex) when (ex is EndOfStreamException or ArgumentException)
-            {
-                return ErrorCode.CorruptedEntry;
-            }
-            catch (IOException)
-            {
-                return ErrorCode.IOError;
-            }
-            catch (ObjectDisposedException)
-            {
-                return ErrorCode.UnInitializedInstance;
-            }
-            catch
-            {
-                return ErrorCode.UnexpectedError;
-            }
-
-            return ErrorCode.None;
+            return errorCode;
         }
 
         public static ErrorCode ReadFrame(
@@ -139,43 +60,33 @@ namespace kv_store.Implementations
             op = null;
             key = null;
             value = null;
+            ErrorCode errorCode;
             try
             {
-                ErrorCode errorCode;
-
                 var crc = r.ReadUInt32();
+                op = (WAOperation)r.ReadByte();
+                key = r.ReadString();
+                value = (op == PUT) ? r.ReadBytes(r.ReadInt32()) : null;
 
-                errorCode = ReadFromBytes(r, out op, out key, out value);
-                if (errorCode != ErrorCode.None)
-                    return errorCode;
-
-                if (op == null || key == null || (op == WAOperation.PUT && value == null))
-                    return ErrorCode.UnexpectedError;
+                if (op == null || key == null || (op == PUT && value == null))
+                    return UnexpectedFailure;
 
                 errorCode = GetCrc32Hash((WAOperation)op, key, value, out var crcHash);
-                if (errorCode != ErrorCode.None)
+                if (errorCode != None)
                     return errorCode;
 
                 if (crcHash != crc)
-                    return ErrorCode.CorruptedEntry;
+                    return EntryIsCorrupted;
             }
             catch (Exception ex) when (ex is ArgumentException or EndOfStreamException)
             {
-                return ErrorCode.CorruptedEntry;
+                return EntryIsCorrupted;
             }
-            catch (ObjectDisposedException)
+            catch (Exception ex)
             {
-                return ErrorCode.UnInitializedInstance;
+                return GetErrorCode(ex);
             }
-            catch (IOException)
-            {
-                return ErrorCode.IOError;
-            }
-            catch
-            {
-                return ErrorCode.UnexpectedError;
-            }
-            return ErrorCode.None;
+            return errorCode;
         }
 
         public static ErrorCode GetCrc32Hash(
@@ -186,15 +97,27 @@ namespace kv_store.Implementations
         )
         {
             CrcHash = 0;
-            if (string.IsNullOrWhiteSpace(key) || (op == WAOperation.PUT && (value == null)))
-                return ErrorCode.InvalidArguments;
+            if (string.IsNullOrWhiteSpace(key) || (op == PUT && (value == null)))
+                return ArgumentsAreInvalid;
 
-            CrcHash = Crc32.HashToUInt32([
-                (byte)op,
-                .. Encoding.UTF8.GetBytes(key),
-                .. value ?? [],
-            ]);
-            return ErrorCode.None;
+            int bufferLength = 1 + Encoding.UTF8.GetByteCount(key) + (value?.Length ?? 0);
+            var buffer = ArrayPool<byte>.Shared.Rent(bufferLength);
+            try
+            {
+                var span = buffer.AsSpan(0, bufferLength);
+                span[0] = (byte)op;
+                span = span[1..];
+                int keyBytes = Encoding.UTF8.GetBytes(key, span);
+                span = span[keyBytes..];
+                if (value != null)
+                    value.CopyTo(span);
+                CrcHash = Crc32.HashToUInt32(buffer.AsSpan(0, bufferLength));
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+            return None;
         }
     }
 }

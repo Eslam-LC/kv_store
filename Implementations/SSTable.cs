@@ -1,6 +1,8 @@
 using System.Text;
 using kv_store.Enums;
-using static kv_store.Implementations.BloomFilter;
+using static kv_store.Enums.ErrorCode;
+using static kv_store.Enums.MapExToEr;
+using static kv_store.Enums.WAOperation;
 
 namespace kv_store.Implementations
 {
@@ -25,83 +27,11 @@ namespace kv_store.Implementations
             [Magic/Version: 4B]                      // repeated at the tail too — lets you validate reading backward too
         */
 
-        byte[] MagicVersion { get; set; } = _magicVersion;
         SparseIndex SparseIndex_ { get; set; } = new();
         BloomFilter BloomFilter_ { get; set; } = new(entriesCount);
         string? FirstKey;
         string? LastKey;
-        FooterTag Footer_ { get; set; } = new() { MagicVersion = _magicVersion };
-
-        record FooterTag
-        {
-            public long IndexOffset { get; set; }
-            public int IndexLength { get; set; }
-            public long FilterOffset { get; set; }
-            public int FilterLength { get; set; }
-            public long BitSize { get; set; }
-            public int HashCount { get; set; }
-            public long FirstLastKeyOffset { get; set; }
-            public int RecordCount { get; set; }
-            public required byte[] MagicVersion { get; set; }
-
-            public ErrorCode WriteTag(BinaryWriter w)
-            {
-                try
-                {
-                    w.Write(IndexOffset);
-                    w.Write(IndexLength);
-                    w.Write(FilterOffset);
-                    w.Write(FilterLength);
-                    w.Write(BitSize);
-                    w.Write(HashCount);
-                    w.Write(FirstLastKeyOffset);
-                    w.Write(RecordCount);
-                    w.Write(MagicVersion);
-                }
-                catch (IOException)
-                {
-                    return ErrorCode.IOError;
-                }
-                catch (ObjectDisposedException)
-                {
-                    return ErrorCode.UnInitializedInstance;
-                }
-                catch
-                {
-                    return ErrorCode.UnexpectedError;
-                }
-                return ErrorCode.None;
-            }
-
-            public ErrorCode ReadTag(BinaryReader r)
-            {
-                try
-                {
-                    IndexOffset = r.ReadInt64();
-                    IndexLength = r.ReadInt32();
-                    FilterOffset = r.ReadInt64();
-                    FilterLength = r.ReadInt32();
-                    BitSize = r.ReadInt64();
-                    HashCount = r.ReadInt32();
-                    FirstLastKeyOffset = r.ReadInt64();
-                    RecordCount = r.ReadInt32();
-                    MagicVersion = r.ReadBytes(4);
-                }
-                catch (IOException)
-                {
-                    return ErrorCode.IOError;
-                }
-                catch (ObjectDisposedException)
-                {
-                    return ErrorCode.UnInitializedInstance;
-                }
-                catch
-                {
-                    return ErrorCode.UnexpectedError;
-                }
-                return ErrorCode.None;
-            }
-        }
+        FooterTag Footer { get; set; } = new() { MagicVersion = _magicVersion };
 
         public static ErrorCode WriteTableToFile(
             string path,
@@ -127,23 +57,21 @@ namespace kv_store.Implementations
                     if (i % 10 == 0)
                     {
                         errorCode = sst.SparseIndex_.AddEntry(entry.Key, w.BaseStream.Position);
-                        if (errorCode != ErrorCode.None)
+                        if (errorCode != None)
                             return errorCode;
                     }
 
                     errorCode = sst.BloomFilter_.Add(entry.Key);
-                    if (errorCode != ErrorCode.None)
+                    if (errorCode != None)
                         return errorCode;
-
-                    sst.Footer_.RecordCount++;
 
                     errorCode = WARecord.WriteFrame(
                         w,
-                        entry.Value == null ? WAOperation.DELETE : WAOperation.PUT,
+                        entry.Value == null ? DELETE : PUT,
                         entry.Key,
                         entry.Value!
                     );
-                    if (errorCode != ErrorCode.None)
+                    if (errorCode != None)
                         return errorCode;
 
                     if (i == 0)
@@ -153,167 +81,67 @@ namespace kv_store.Implementations
                     i++;
                 }
 
+                sst.Footer.RecordCount = i;
+
                 if (
                     string.IsNullOrWhiteSpace(sst.FirstKey)
                     || string.IsNullOrWhiteSpace(sst.LastKey)
                 )
-                    return ErrorCode.EntryIsEmpty;
+                    return EntryIsEmpty;
 
-                sst.Footer_.IndexOffset = w.BaseStream.Position;
+                sst.Footer.IndexOffset = w.BaseStream.Position;
                 errorCode = sst.SparseIndex_.WriteIndex(w);
-                if (errorCode != ErrorCode.None)
+                if (errorCode != None)
                     return errorCode;
-                sst.Footer_.IndexLength = (int)(w.BaseStream.Position - sst.Footer_.IndexOffset);
+                sst.Footer.IndexLength = (int)(w.BaseStream.Position - sst.Footer.IndexOffset);
 
-                sst.Footer_.FilterOffset = w.BaseStream.Position;
+                sst.Footer.FilterOffset = w.BaseStream.Position;
                 var filterBytes = sst.BloomFilter_.GetBytes;
                 if (filterBytes == null)
-                    return ErrorCode.UnexpectedError;
+                    return UnexpectedFailure;
                 w.Write(filterBytes);
-                sst.Footer_.FilterLength = (int)(w.BaseStream.Position - sst.Footer_.FilterOffset);
-                sst.Footer_.BitSize = sst.BloomFilter_.BitSize;
-                sst.Footer_.HashCount = sst.BloomFilter_.HashCount;
+                sst.Footer.FilterLength = (int)(w.BaseStream.Position - sst.Footer.FilterOffset);
+                sst.Footer.BitSize = sst.BloomFilter_.BitSize;
+                sst.Footer.HashCount = sst.BloomFilter_.HashCount;
 
-                sst.Footer_.FirstLastKeyOffset = w.BaseStream.Position;
+                sst.Footer.FirstLastKeyOffset = w.BaseStream.Position;
                 w.Write(sst.FirstKey);
                 w.Write(sst.LastKey);
 
-                errorCode = sst.Footer_.WriteTag(w);
-                if (errorCode != ErrorCode.None)
+                errorCode = sst.Footer.WriteTag(w);
+                if (errorCode != None)
                     return errorCode;
 
                 stream.Flush(true);
 
                 sst.Path = path;
+
                 immutableSSTable = sst.GetImmutableSSTable();
             }
-            catch (IOException)
+            catch (Exception ex)
             {
-                return ErrorCode.IOError;
-            }
-            catch (ObjectDisposedException)
-            {
-                return ErrorCode.UnInitializedInstance;
-            }
-            catch
-            {
-                return ErrorCode.UnexpectedError;
+                return GetErrorCode(ex);
             }
 
-            return ErrorCode.None;
-        }
-
-        public class ImmutableSSTable(
-            string FileName,
-            byte[] MagicVersion,
-            ImmutableSkipList<string, long> SparseIndex,
-            byte[] FilterBytes,
-            long BitSize,
-            int HashCount,
-            string FirstKey,
-            string LastKey,
-            long RecordCount
-        )
-        {
-            public string FileName_ = FileName;
-            public readonly byte[] MagicVersion_ = MagicVersion;
-            public readonly ImmutableSkipList<string, long> SparseIndex_ = SparseIndex;
-            public readonly ImmutableBloomFilter BloomFilter_ = new(
-                FilterBytes,
-                BitSize,
-                HashCount
-            );
-            public readonly string FirstKey_ = FirstKey;
-            public readonly string LastKey_ = LastKey;
-            public readonly long RecordCount_ = RecordCount;
-
-            public ErrorCode TryReadEntry(string key, out byte[]? value)
-            {
-                value = null;
-                ErrorCode errCode;
-                if (
-                    key.CompareTo(FirstKey_, StringComparison.Ordinal) < 0
-                    || key.CompareTo(LastKey_, StringComparison.Ordinal) > 0
-                )
-                    return ErrorCode.KeyNotFound;
-
-                errCode = BloomFilter_.Contains(key, out bool MayExist);
-                if (errCode != ErrorCode.None)
-                    return errCode;
-
-                if (!MayExist)
-                    return ErrorCode.KeyNotFound;
-
-                if (!SparseIndex_.GetValueAtOrBefore(key, out long offset))
-                    return ErrorCode.KeyNotFound;
-
-                using FileStream stream = new(FileName_, FileMode.Open, FileAccess.Read);
-                using BinaryReader reader = new(stream);
-
-                reader.BaseStream.Seek(offset, SeekOrigin.Begin);
-                errCode = WARecord.ReadFrame(
-                    reader,
-                    out var op,
-                    out string? fetchedKey,
-                    out value!
-                );
-                if (value == null && op == WAOperation.PUT)
-                    value = [];
-
-                while (key.CompareTo(fetchedKey, StringComparison.Ordinal) > 0)
-                {
-                    errCode = WARecord.ReadFrame(reader, out op, out fetchedKey, out value!);
-                    if (value == null && op == WAOperation.PUT)
-                        value = [];
-                    if (errCode != ErrorCode.None)
-                        return errCode;
-                }
-
-                if (
-                    string.IsNullOrWhiteSpace(fetchedKey)
-                    || errCode != ErrorCode.None
-                    || fetchedKey.CompareTo(key, StringComparison.Ordinal) != 0
-                )
-                    return ErrorCode.CorruptedEntry;
-
-                if (op == WAOperation.DELETE)
-                    return ErrorCode.KeyDeleted;
-
-                return ErrorCode.None;
-            }
+            return None;
         }
 
         public ImmutableSSTable GetImmutableSSTable()
         {
             return new(
                 Path,
-                _magicVersion,
-                SparseIndex_.GetEntries(),
-                BloomFilter_.GetBytes!,
-                BloomFilter_.BitSize,
-                BloomFilter_.HashCount,
+                Footer,
                 FirstKey!,
                 LastKey!,
-                Footer_.RecordCount
+                SparseIndex_.GetEntries(),
+                BloomFilter_.GetBytes!
             );
         }
 
-        /*
-        [magic/version: 4B]                          // header, fixed offset 0
-        [record blocks: Key | ValueLen | Value]...   // your KVPairIO records, sequential
-        [sparse index: Key | Offset]...              // one entry per N records, or one per block
-        [BloomFilter bytes]
-        [First key][Last key]
-        [Footer, FIXED SIZE, written last]:
-            [IndexOffset: 8B]  [IndexLength: 4B]
-            [FilterOffset: 8B] [FilterLength: 4B]
-            [BitSize: 8B] [HashCount: 4B]
-            [First/Last Key Offset: 8B]
-            [RecordCount: 4B]
-            [Magic/Version: 4B]                      // repeated at the tail too — lets you validate reading backward too
-        */
-
-        public static ErrorCode ReadFileToTable(string path, out ImmutableSSTable? immutableSSTable)
+        public static ErrorCode ReadFromFileToTable(
+            string path,
+            out ImmutableSSTable? immutableSSTable
+        )
         {
             immutableSSTable = null;
             try
@@ -322,64 +150,207 @@ namespace kv_store.Implementations
                 using BinaryReader r = new(stream);
 
                 if (!r.ReadBytes(4).SequenceEqual(_magicVersion))
-                    return ErrorCode.FileCorruptedOrUnsupportedVersion;
+                    return FileIsCorruptedOrVersionUnsupported;
                 r.BaseStream.Seek(FooterSize, SeekOrigin.End);
                 var Footer_ = new FooterTag() { MagicVersion = [] };
                 var errCode = Footer_.ReadTag(r);
-                if (errCode != ErrorCode.None)
+                if (errCode != None)
                     return errCode;
 
                 if (!Footer_.MagicVersion.SequenceEqual(_magicVersion))
-                    return ErrorCode.FileCorruptedOrUnsupportedVersion;
+                    return FileIsCorruptedOrVersionUnsupported;
 
-                r.BaseStream.Seek(Footer_.IndexOffset, SeekOrigin.Begin);
-                errCode = SparseIndex.ReadIndex(
-                    r,
-                    Footer_.IndexLength,
-                    out ImmutableSkipList<string, long> sparseIndex
-                );
-                if (errCode != ErrorCode.None)
-                    return errCode;
-
-                r.BaseStream.Seek(Footer_.FilterOffset, SeekOrigin.Begin);
-                byte[] filterBytes = r.ReadBytes(Footer_.FilterLength);
-                if (filterBytes.Length != Footer_.FilterLength)
-                    return ErrorCode.CorruptedEntry;
-
-                r.BaseStream.Seek(Footer_.FirstLastKeyOffset, SeekOrigin.Begin);
-                var firstKey = r.ReadString();
-                var lastKey = r.ReadString();
-
-                immutableSSTable = new(
-                    path,
-                    _magicVersion,
-                    sparseIndex,
-                    filterBytes,
-                    Footer_.BitSize,
-                    Footer_.HashCount,
-                    firstKey,
-                    lastKey,
-                    Footer_.RecordCount
-                );
+                immutableSSTable = new(path, Footer_);
             }
-            catch (EndOfStreamException)
+            catch (Exception ex)
             {
-                return ErrorCode.CorruptedEntry;
-            }
-            catch (IOException)
-            {
-                return ErrorCode.IOError;
-            }
-            catch (ObjectDisposedException)
-            {
-                return ErrorCode.UnInitializedInstance;
-            }
-            catch
-            {
-                return ErrorCode.UnexpectedError;
+                return GetErrorCode(ex);
             }
 
-            return ErrorCode.None;
+            return None;
+        }
+
+        public record FooterTag
+        {
+            public long IndexOffset { get; set; }
+            public int IndexLength { get; set; }
+            public long FilterOffset { get; set; }
+            public int FilterLength { get; set; }
+            public long BitSize { get; set; }
+            public int HashCount { get; set; }
+            public long FirstLastKeyOffset { get; set; }
+            public int RecordCount { get; set; }
+            public required byte[] MagicVersion { get; set; }
+
+            public ErrorCode WriteTag(BinaryWriter w)
+            {
+                try
+                {
+                    w.Write(IndexOffset);
+                    w.Write(IndexLength);
+                    w.Write(FilterOffset);
+                    w.Write(FilterLength);
+                    w.Write(BitSize);
+                    w.Write(HashCount);
+                    w.Write(FirstLastKeyOffset);
+                    w.Write(RecordCount);
+                    w.Write(MagicVersion!);
+                }
+                catch (Exception ex)
+                {
+                    return GetErrorCode(ex);
+                }
+                return None;
+            }
+
+            public ErrorCode ReadTag(BinaryReader r)
+            {
+                try
+                {
+                    IndexOffset = r.ReadInt64();
+                    IndexLength = r.ReadInt32();
+                    FilterOffset = r.ReadInt64();
+                    FilterLength = r.ReadInt32();
+                    BitSize = r.ReadInt64();
+                    HashCount = r.ReadInt32();
+                    FirstLastKeyOffset = r.ReadInt64();
+                    RecordCount = r.ReadInt32();
+                    MagicVersion = r.ReadBytes(4);
+                }
+                catch (Exception ex)
+                {
+                    return GetErrorCode(ex);
+                }
+                return None;
+            }
+        }
+    }
+
+    public class ImmutableSSTable : IDisposable
+    {
+        public string FileName;
+        public readonly byte[] MagicVersion;
+        public readonly long RecordCount;
+        public readonly string FirstKey;
+        public readonly string LastKey;
+
+        public readonly ImmutableSkipList<string, long> SparseIndex;
+        public readonly ImmutableBloomFilter BloomFilter;
+
+        private FileStream? stream;
+        private BinaryReader? reader;
+
+        public ImmutableSSTable(string fileName, SSTable.FooterTag footer)
+        {
+            FileName = fileName;
+            MagicVersion = footer.MagicVersion;
+            RecordCount = footer.RecordCount;
+
+            using FileStream s = new(FileName, FileMode.Open, FileAccess.Read);
+            using BinaryReader r = new(s);
+            r.BaseStream.Seek(footer.FirstLastKeyOffset, SeekOrigin.Begin);
+            FirstKey = r.ReadString();
+            LastKey = r.ReadString();
+            r.BaseStream.Seek(footer.IndexOffset, SeekOrigin.Begin);
+            var errCode = Implementations.SparseIndex.ReadIndex(
+                r,
+                footer.IndexLength,
+                out SparseIndex
+            );
+            if (errCode != None)
+                throw new ArgumentException("Failed to read sparse index", nameof(footer));
+            r.BaseStream.Seek(footer.FilterOffset, SeekOrigin.Begin);
+            BloomFilter = new(r.ReadBytes(footer.FilterLength), footer.BitSize, footer.HashCount);
+        }
+
+        public ImmutableSSTable(
+            string fileName,
+            SSTable.FooterTag foooter,
+            string firstKey,
+            string lastKey,
+            ImmutableSkipList<string, long> sparseIndex,
+            byte[] filterBytes
+        )
+        {
+            FileName = fileName;
+            MagicVersion = foooter.MagicVersion;
+            RecordCount = foooter.RecordCount;
+            FirstKey = firstKey;
+            LastKey = lastKey;
+            SparseIndex = sparseIndex;
+            BloomFilter = new(filterBytes, foooter.BitSize, foooter.HashCount);
+        }
+
+        public ErrorCode TryReadEntry(string key, out byte[]? value)
+        {
+            value = null;
+            ErrorCode errCode;
+            if (
+                key.CompareTo(FirstKey, StringComparison.Ordinal) < 0
+                || key.CompareTo(LastKey, StringComparison.Ordinal) > 0
+            )
+                return KeyWasNotFound;
+
+            errCode = BloomFilter.Contains(key, out bool MayExist);
+            if (errCode != None)
+                return errCode;
+
+            if (!MayExist)
+                return KeyWasNotFound;
+
+            if (!SparseIndex.GetValueAtOrBefore(key, out long offset))
+                return KeyWasNotFound;
+            if (reader == null)
+            {
+                stream = new(FileName, FileMode.Open, FileAccess.Read);
+                reader = new(stream);
+            }
+
+            reader.BaseStream.Seek(offset, SeekOrigin.Begin);
+            errCode = WARecord.ReadFrame(reader, out var op, out string? fetchedKey, out value!);
+
+            while (
+                errCode == None
+                && fetchedKey != null
+                && key.CompareTo(fetchedKey, StringComparison.Ordinal) > 0
+            )
+            {
+                errCode = WARecord.ReadFrame(reader, out op, out fetchedKey, out value!);
+            }
+
+            if (errCode != None)
+                return errCode;
+
+            if (key.CompareTo(fetchedKey, StringComparison.Ordinal) != 0)
+                return KeyWasNotFound;
+
+            if (op == DELETE)
+                return KeyWasDeleted;
+
+            return None;
+        }
+
+        private bool _disposed = false;
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                reader?.Close();
+                stream?.Close();
+                _disposed = true;
+            }
+            GC.SuppressFinalize(this);
+        }
+
+        ~ImmutableSSTable()
+        {
+            if (!_disposed)
+            {
+                reader?.Close();
+                stream?.Close();
+                _disposed = true;
+            }
         }
     }
 }

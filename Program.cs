@@ -1,10 +1,8 @@
 using System.CommandLine;
 using System.Text;
-using System.Text.RegularExpressions;
-using kv_store;
 using kv_store.Enums;
-using kv_store.Extensions;
 using kv_store.Implementations;
+using static kv_store.Enums.ErrorCode;
 
 namespace kv_store
 {
@@ -16,8 +14,14 @@ namespace kv_store
 
             var dataDirOption = new Option<DirectoryInfo>("--data-dir", "-d")
             {
-                Description = "directory for wal_log and snapshot.dat.",
+                Description = "specifies directory for wal.log and snapshot.dat.",
                 DefaultValueFactory = parseResult => new DirectoryInfo("./data"),
+            };
+
+            var hexOption = new Option<bool>("--hex", "-x")
+            {
+                Description = "use to enter raw hex values.",
+                DefaultValueFactory = parseResult => false,
             };
 
             var keyArgument = new Argument<string>("key") { Description = "the key of the entry" };
@@ -31,21 +35,12 @@ namespace kv_store
             var putCommand = new Command("put", "inserts a key value pair into store.")
             {
                 Arguments = { keyArgument, valueArgument },
-            };
-            var putHexCommand = new Command("puthex", "inserts a hex value for a key into store")
-            {
-                Arguments = { keyArgument, valueArgument },
+                Options = { hexOption },
             };
             var getCommand = new Command("get", "view the value as utf8 string.")
             {
                 Arguments = { keyArgument },
-            };
-            var getHexCommand = new Command(
-                "gethex",
-                "gets the value of a key and view it in hex format."
-            )
-            {
-                Arguments = { keyArgument },
+                Options = { hexOption },
             };
             var deleteCommand = new Command("delete", "deletes a key along with it's value.")
             {
@@ -74,9 +69,7 @@ namespace kv_store
                 Subcommands =
                 {
                     putCommand,
-                    putHexCommand,
                     getCommand,
-                    getHexCommand,
                     deleteCommand,
                     snapshotCommand,
                     replayCommand,
@@ -95,46 +88,29 @@ namespace kv_store
             if (!dir.Exists)
                 dir.Create();
 
-            var Engine = new WAEngine(dir.FullName);
+            var Engine = new WAEngine(dir.FullName); // later on the configs may include file names.
             errCode = Engine.Init(out var errors);
-            if (errCode != ErrorCode.None)
+            if (errCode != None)
             {
-                if (errCode == ErrorCode.ErrorInSSTablesLoading)
+                if (errCode == SstablesFailedToLoad)
                 {
                     foreach (var (e, f) in errors)
                     {
-                        Console.WriteLine($"Error {e.GetDescription()} \nWhen loading file {f}");
+                        Console.WriteLine($"Error {errCode} \nWhen loading file {f}");
                     }
                 }
                 else
                 {
-                    Console.WriteLine($"engine initialization error: {errCode.GetDescription()}");
+                    Console.WriteLine($"Engine initialization error: {errCode}");
                 }
-            }
-
-            var SnapshotPath = Path.Combine(dir.FullName, "snapshot.dat");
-            var WALPath = Path.Combine(dir.FullName, "wal_log");
-
-            if (File.Exists(SnapshotPath))
-            {
-                errCode = Engine.LoadSnapshot();
-                if (errCode != ErrorCode.None && errCode != ErrorCode.FileIsEmpty)
-                    Console.WriteLine(
-                        $"Snapshot failed to load. Error: {errCode.GetDescription()}"
-                    );
-            }
-
-            if (File.Exists(WALPath))
-            {
-                errCode = Engine.ReplayRecords();
-                if (errCode != ErrorCode.None && errCode != ErrorCode.FileIsEmpty)
-                    Console.WriteLine($"WALog failed to load. Error: {errCode.GetDescription()}");
             }
 
             putCommand.SetAction(parseResult =>
             {
                 var key = parseResult.GetValue(keyArgument);
                 var value = parseResult.GetValue(valueArgument);
+                var hex = parseResult.GetValue(hexOption);
+
                 if (string.IsNullOrWhiteSpace(key) || value == null)
                 {
                     ErrorMessage = $"Error: Invalid key or value entered.";
@@ -146,12 +122,12 @@ namespace kv_store
                 for (int i = 0; i < value.Length; i++)
                 {
                     string str = value[i];
-                    if (str.StartsWith($"0x", StringComparison.OrdinalIgnoreCase))
+                    if (hex)
                     {
                         var errorCode = ConvertHexStringToBytes(str[2..], out ABytes[i]);
-                        if (errorCode != ErrorCode.None || ABytes[i] == null)
+                        if (errorCode != None || ABytes[i] == null)
                         {
-                            ErrorMessage = $"Error: {errorCode.GetDescription()}";
+                            ErrorMessage = $"Error: {errorCode}";
                             return;
                         }
                     }
@@ -166,46 +142,9 @@ namespace kv_store
                 byte[] bytes = [.. ABytes.SelectMany(s => s)];
 
                 var errCode = Engine.Put(key, [.. bytes]);
-                if (errCode != ErrorCode.None)
+                if (errCode != None)
                 {
-                    ErrorMessage = $"Error: {errCode.GetDescription()}.";
-                    return;
-                }
-                SuccessMessage = $"key: {key} was inserted.";
-            });
-
-            putHexCommand.SetAction(parseResult =>
-            {
-                var key = parseResult.GetValue(keyArgument);
-                var value = parseResult.GetValue(valueArgument);
-                if (string.IsNullOrWhiteSpace(key) || value == null)
-                {
-                    ErrorMessage = $"Error: Invalid key or value entered.";
-                    return;
-                }
-
-                byte[][] ABytes = new byte[value.Length][];
-
-                for (int i = 0; i < value.Length; i++)
-                {
-                    string str = value[i];
-                    var errorCode = ConvertHexStringToBytes(str, out ABytes[i]);
-
-                    if (errorCode != ErrorCode.None || ABytes[i] == null)
-                    {
-                        ErrorMessage = $"Error: {errorCode.GetDescription()}";
-                        return;
-                    }
-                }
-
-                byte[] bytes = [.. ABytes.SelectMany(s => s)];
-
-                // Console.WriteLine(PrintByteArray(bytes)); // debug line
-
-                var errCode = Engine.Put(key, [.. bytes]);
-                if (errCode != ErrorCode.None)
-                {
-                    ErrorMessage = $"Error: {errCode.GetDescription()}.";
+                    ErrorMessage = $"Error: {errCode}.";
                     return;
                 }
                 SuccessMessage = $"key: {key} was inserted.";
@@ -214,37 +153,23 @@ namespace kv_store
             getCommand.SetAction(parseResult =>
             {
                 var key = parseResult.GetValue(keyArgument);
+                var hex = parseResult.GetValue(hexOption);
 
                 if (key == null)
                 {
-                    ErrorMessage = $"Error: {ErrorCode.KeyNotValid}.";
+                    ErrorMessage = $"Error: {KeyIsInvalid}.";
                     return;
                 }
                 var errCode = Engine.TryGet(key, out var value);
-                if (errCode != ErrorCode.None)
+                if (errCode != None)
                 {
-                    ErrorMessage = $"Error: {errCode.GetDescription()}.";
+                    ErrorMessage = $"Error: {errCode}.";
                     return;
                 }
-                SuccessMessage = $"{key} : {PrintByteArrayAsString(value!)}";
-            });
-
-            getHexCommand.SetAction(parseResult =>
-            {
-                var key = parseResult.GetValue(keyArgument);
-
-                if (key == null)
-                {
-                    ErrorMessage = $"Error: {ErrorCode.KeyNotValid}.";
-                    return;
-                }
-                var errCode = Engine.TryGet(key, out var value);
-                if (errCode != ErrorCode.None)
-                {
-                    ErrorMessage = $"Error: {errCode.GetDescription()}.";
-                    return;
-                }
-                SuccessMessage = $"{key} : {PrintByteArray(value!)}";
+                if (hex)
+                    SuccessMessage = $"{key} : {PrintByteArray(value!)}";
+                else
+                    SuccessMessage = $"{key} : {PrintByteArrayAsString(value!)}";
             });
 
             deleteCommand.SetAction(parseResult =>
@@ -253,13 +178,13 @@ namespace kv_store
 
                 if (key == null)
                 {
-                    ErrorMessage = $"Error: {ErrorCode.KeyNotValid}.";
+                    ErrorMessage = $"Error: {KeyIsInvalid}.";
                     return;
                 }
                 var errCode = Engine.Delete(key);
-                if (errCode != ErrorCode.None)
+                if (errCode != None)
                 {
-                    ErrorMessage = $"Error: {errCode.GetDescription()}.";
+                    ErrorMessage = $"Error: {errCode}.";
                     return;
                 }
                 SuccessMessage = $"key: {key} was deleted.";
@@ -274,9 +199,9 @@ namespace kv_store
 
                 errCode = Engine.SaveSnapshot();
 
-                if (errCode != ErrorCode.None)
+                if (errCode != None)
                 {
-                    ErrorMessage = $"Error: {errCode.GetDescription()}.";
+                    ErrorMessage = $"Error: {errCode}.";
                     return;
                 }
                 SuccessMessage = $"snapshot saved.";
@@ -291,9 +216,9 @@ namespace kv_store
 
                 errCode = Engine.LoadSnapshot();
 
-                if (errCode != ErrorCode.None)
+                if (errCode != None)
                 {
-                    ErrorMessage = $"Error: {errCode.GetDescription()}.";
+                    ErrorMessage = $"Error: {errCode}.";
                     return;
                 }
                 Console.Write($"do you want to append WAL operations? (y/n)");
@@ -302,13 +227,13 @@ namespace kv_store
                 if (key.KeyChar == 'y' || key.Key == ConsoleKey.Enter)
                 {
                     errCode = Engine.ReplayRecords();
-                    if (errCode != ErrorCode.None)
+                    if (errCode != None)
                     {
-                        Console.WriteLine($"Error: {errCode.GetDescription()}");
+                        Console.WriteLine($"Error: {errCode}");
                     }
                     else
                     {
-                        Console.WriteLine($"WAL appended from: {WALPath}.");
+                        Console.WriteLine($"WAL appended from: {Engine.WALFile}.");
                     }
                 }
                 SuccessMessage = $"snapshot loaded.";
@@ -318,9 +243,9 @@ namespace kv_store
             {
                 ErrorCode errCode;
                 errCode = Engine.ReplayRecords();
-                if (errCode != ErrorCode.None)
+                if (errCode != None)
                 {
-                    ErrorMessage = $"Error: {errCode.GetDescription()}.";
+                    ErrorMessage = $"Error: {errCode}.";
                     return;
                 }
                 SuccessMessage = $"WAL restored.";
@@ -412,7 +337,7 @@ namespace kv_store
             if (string.IsNullOrWhiteSpace(str))
             {
                 bytes = [];
-                return ErrorCode.InvalidArguments;
+                return ArgumentsAreInvalid;
             }
 
             byte[] tempbytes;
@@ -423,12 +348,12 @@ namespace kv_store
             catch (FormatException)
             {
                 bytes = [];
-                return ErrorCode.ValueNotValid;
+                return ValueIsInvalid;
             }
 
             bytes = tempbytes;
 
-            return ErrorCode.None;
+            return None;
         }
     }
 }

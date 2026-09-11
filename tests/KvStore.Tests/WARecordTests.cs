@@ -56,7 +56,7 @@ public class WARecordTests
     {
         using var ms = new MemoryStream();
         using var w = new BinaryWriter(ms);
-        Assert.Equal(ErrorCode.KeyNotValid, WARecord.WriteFrame(w, WAOperation.PUT, "  ", [1]));
+        Assert.Equal(ErrorCode.KeyIsInvalid, WARecord.WriteFrame(w, WAOperation.PUT, "  ", [1]));
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class WARecordTests
         framed[6] ^= 0xFF; // one byte inside the body
         using var ms = new MemoryStream(framed);
         using var r = new BinaryReader(ms);
-        Assert.Equal(ErrorCode.CorruptedEntry, WARecord.ReadFrame(r, out _, out _, out _));
+        Assert.Equal(ErrorCode.EntryIsCorrupted, WARecord.ReadFrame(r, out _, out _, out _));
     }
 
     [Fact]
@@ -90,6 +90,6 @@ public class WARecordTests
         var framed = WriteFrame(WAOperation.PUT, "big", "x"u8.ToArray());
         using var ms = new MemoryStream(framed, 0, framed.Length - 2);
         using var r = new BinaryReader(ms);
-        Assert.Equal(ErrorCode.CorruptedEntry, WARecord.ReadFrame(r, out _, out _, out _));
+        Assert.Equal(ErrorCode.EntryIsCorrupted, WARecord.ReadFrame(r, out _, out _, out _));
     }
 }

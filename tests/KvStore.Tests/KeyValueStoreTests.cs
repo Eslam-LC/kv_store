@@ -33,7 +33,7 @@ public class KeyValueStoreTests
         Assert.Equal(ErrorCode.None, store.Put("k", [1]));
 
         Assert.Equal(ErrorCode.None, store.Delete("k"));
-        Assert.Equal(ErrorCode.KeyDeleted, store.TryGet("k", out _));
+        Assert.Equal(ErrorCode.KeyWasDeleted, store.TryGet("k", out _));
 
         // tombstone node survives in memory so a flush emits a DELETE frame
         Assert.True(HasTombstone(store, "k"));
@@ -107,5 +107,29 @@ public class KeyValueStoreTests
 
         Assert.Equal(3, store.Count);
         Assert.Equal(3, EnumerateCount(store));
+    }
+
+    [Fact]
+    public void Clear_ResetsMemoryStorage()
+    {
+        var store = new KeyValueStore();
+        Assert.Equal(ErrorCode.None, store.Put("a", new byte[10]));
+        Assert.Equal(ErrorCode.None, store.Put("b", new byte[20]));
+
+        Assert.Equal(ErrorCode.None, store.Clear());
+        Assert.Equal(0, store.Count);
+        Assert.Equal(0, store.MemoryStorage);
+    }
+
+    [Fact]
+    public void Clear_ThenPut_ReaccountsFromScratch()
+    {
+        var store = new KeyValueStore();
+        Assert.Equal(ErrorCode.None, store.Put("a", new byte[10]));
+        Assert.Equal(ErrorCode.None, store.Clear());
+
+        // re-inserting the same key must count exactly key + value once
+        Assert.Equal(ErrorCode.None, store.Put("a", new byte[10]));
+        Assert.Equal(11, store.MemoryStorage);
     }
 }

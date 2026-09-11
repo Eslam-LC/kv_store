@@ -1,17 +1,15 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using kv_store.Enums;
+using static kv_store.Enums.ErrorCode;
+using static kv_store.Enums.WAOperation;
 
 namespace kv_store.Implementations
 {
     public class Snapshot
     {
-        public static ErrorCode SaveSnapshot(BinaryWriter w, in KeyValueStore store)
+        public static ErrorCode SaveSnapshot(BinaryWriter w, KeyValueStore store)
         {
             var errCode = store.GetImmutableKVList(out var ROKVL);
-            if (errCode != ErrorCode.None)
+            if (errCode != None)
                 return errCode;
 
             try
@@ -19,35 +17,30 @@ namespace kv_store.Implementations
                 w.Write(store.Count); // deliberatly not using roDict.Count() to avoid unecessary O(n) traverse over the enumerable
                 foreach (var (key, value) in ROKVL)
                 {
-                    errCode = WARecord.WriteFrame(
-                        w,
-                        value == null ? WAOperation.DELETE : WAOperation.PUT,
-                        key,
-                        value
-                    );
-                    if (errCode != ErrorCode.None)
+                    errCode = WARecord.WriteFrame(w, value == null ? DELETE : PUT, key, value);
+                    if (errCode != None)
                         return errCode;
                 }
             }
             catch (IOException)
             {
-                return ErrorCode.IOError;
+                return InputOutputFailed;
             }
             catch (UnauthorizedAccessException)
             {
-                return ErrorCode.AccessDenied;
+                return AccessDenied;
             }
             catch (Exception)
             {
-                return ErrorCode.UnexpectedError;
+                return UnexpectedFailure;
             }
-            return ErrorCode.None;
+            return None;
         }
 
         public static ErrorCode LoadSnapshot(BinaryReader r, KeyValueStore store)
         {
             if (r.BaseStream.Length == 0)
-                return ErrorCode.FileIsEmpty;
+                return FileIsEmpty;
 
             try
             {
@@ -62,14 +55,14 @@ namespace kv_store.Implementations
                         out string? key,
                         out byte[]? value
                     );
-                    if (errCode != ErrorCode.None)
+                    if (errCode != None)
                         return errCode;
 
                     if (key == null || op == null)
-                        return ErrorCode.UnexpectedError;
+                        return UnexpectedFailure;
 
                     if (tempDict.ContainsKey(key))
-                        return ErrorCode.CorruptedEntry;
+                        return EntryIsCorrupted;
 
                     tempDict.Add(key, value);
                 }
@@ -78,25 +71,25 @@ namespace kv_store.Implementations
             }
             catch (EndOfStreamException)
             {
-                return ErrorCode.CorruptedEntry;
+                return EntryIsCorrupted;
             }
             catch (FileNotFoundException)
             {
-                return ErrorCode.InvalidPath;
+                return PathIsInvalid;
             }
             catch (IOException)
             {
-                return ErrorCode.IOError;
+                return InputOutputFailed;
             }
             catch (UnauthorizedAccessException)
             {
-                return ErrorCode.AccessDenied;
+                return AccessDenied;
             }
             catch (Exception)
             {
-                return ErrorCode.UnexpectedError;
+                return UnexpectedFailure;
             }
-            return ErrorCode.None;
+            return None;
         }
     }
 }

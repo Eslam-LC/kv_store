@@ -60,7 +60,7 @@ public class WAWriterReaderTests : IDisposable
 
         Assert.Equal(ErrorCode.None, store.TryGet("a", out var va));
         Assert.Equal([1], va);
-        Assert.Equal(ErrorCode.KeyDeleted, store.TryGet("b", out _));
+        Assert.Equal(ErrorCode.KeyWasDeleted, store.TryGet("b", out _));
         Assert.Equal(ErrorCode.None, store.TryGet("c", out var vc));
         Assert.Equal([2, 3, 4], vc);
     }
@@ -78,7 +78,7 @@ public class WAWriterReaderTests : IDisposable
         for (int i = 0; i < n; i++)
         {
             Assert.Equal(ErrorCode.None, store.TryGet($"k{i}", out var v));
-            Assert.Equal((byte)i, v[0]);
+            Assert.Equal((byte)i, v![0]);
         }
     }
 
@@ -96,7 +96,7 @@ public class WAWriterReaderTests : IDisposable
             fs.WriteByte((byte)(b ^ 0xFF));
         }
 
-        Assert.Equal(ErrorCode.CorruptedEntry, ReadRecords(new KeyValueStore()));
+        Assert.Equal(ErrorCode.EntryIsCorrupted, ReadRecords(new KeyValueStore()));
     }
 
     [Fact]
@@ -109,6 +109,6 @@ public class WAWriterReaderTests : IDisposable
         byte[] fileBytes = File.ReadAllBytes(logPath);
         File.WriteAllBytes(logPath, fileBytes.Take(fileBytes.Length - 3).ToArray());
 
-        Assert.Equal(ErrorCode.CorruptedEntry, ReadRecords(new KeyValueStore()));
+        Assert.Equal(ErrorCode.EntryIsCorrupted, ReadRecords(new KeyValueStore()));
     }
 }

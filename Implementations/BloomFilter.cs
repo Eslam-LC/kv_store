@@ -1,6 +1,7 @@
 using System.Text;
 using kv_store.Enums;
-using static kv_store.Implementations.BitArrayManipulator;
+using static kv_store.Enums.ErrorCode;
+using static kv_store.Implementations.HashHelper;
 
 namespace kv_store.Implementations
 {
@@ -16,9 +17,6 @@ namespace kv_store.Implementations
         public static ulong H2(ReadOnlySpan<byte> bytes) =>
             System.IO.Hashing.XxHash3.HashToUInt64(bytes, 0xdeadbeef);
 
-        public static ulong G(ReadOnlySpan<byte> bytes, int i, long m) =>
-            (H1(bytes) + (ulong)i * H2(bytes)) % (ulong)m;
-
         public static ulong G(ulong h1, ulong h2, int i, long m) => (h1 + (ulong)i * h2) % (ulong)m;
 
         public static long BestM(long n, double p)
@@ -32,6 +30,42 @@ namespace kv_store.Implementations
             // k = m / n * ln(2)
             return (int)Math.Round((double)m / n * ln2);
         }
+
+        public static int ByteIndex(ulong pos) => (int)pos >> 3;
+
+        public static int BitOffset(ulong pos) => (int)pos & 7;
+
+        public static bool Get(byte[] BitArray, ulong pos)
+        {
+            return (BitArray[ByteIndex(pos)] & (byte)(1 << BitOffset(pos))) != 0;
+        }
+
+        public static ErrorCode BitArrayContains(
+            byte[] bitGet,
+            ReadOnlySpan<byte> key,
+            long m,
+            int k,
+            out bool may
+        )
+        {
+            if (bitGet == null)
+            {
+                may = true;
+                return InstanceIsNotInitialized;
+            }
+            var H1 = HashHelper.H1(key);
+            var H2 = HashHelper.H2(key);
+            for (int i = 0; i < k; i++)
+            {
+                if (!Get(bitGet, G(H1, H2, i, m)))
+                {
+                    may = false;
+                    return None;
+                }
+            }
+            may = true;
+            return None;
+        }
     }
 
     public class BloomFilter
@@ -41,26 +75,24 @@ namespace kv_store.Implementations
 
         public long BitSize => bitSize;
         public int HashCount => hashCount;
-        readonly BitArrayManipulator? bitArray;
+        readonly BitArrayManipulator bitArray;
 
         public BloomFilter(long estimatedItemCount, double desiredFalsePositiveRate = 0.01)
         {
-            bitSize = HashHelper.BestM(estimatedItemCount, desiredFalsePositiveRate);
-            hashCount = HashHelper.BestK(estimatedItemCount, bitSize);
+            bitSize = BestM(estimatedItemCount, desiredFalsePositiveRate);
+            hashCount = BestK(estimatedItemCount, bitSize);
             bitArray = new(bitSize);
         }
 
         public ErrorCode Add(ReadOnlySpan<byte> key)
         {
-            if (bitArray == null)
-                return ErrorCode.UnInitializedInstance;
             var H1 = HashHelper.H1(key);
             var H2 = HashHelper.H2(key);
             for (int i = 0; i < hashCount; i++)
             {
-                bitArray.Set(HashHelper.G(H1, H2, i, bitSize));
+                bitArray.Set(G(H1, H2, i, bitSize));
             }
-            return ErrorCode.None;
+            return None;
         }
 
         public ErrorCode Add(string key)
@@ -70,23 +102,7 @@ namespace kv_store.Implementations
 
         public ErrorCode Contains(ReadOnlySpan<byte> key, out bool MayExist)
         {
-            if (bitArray == null)
-            {
-                MayExist = true;
-                return ErrorCode.UnInitializedInstance;
-            }
-            var H1 = HashHelper.H1(key);
-            var H2 = HashHelper.H2(key);
-            for (int i = 0; i < hashCount; i++)
-            {
-                if (!bitArray.Get(HashHelper.G(H1, H2, i, bitSize)))
-                {
-                    MayExist = false;
-                    return ErrorCode.None;
-                }
-            }
-            MayExist = true;
-            return ErrorCode.None;
+            return BitArrayContains(bitArray.GetBytes, key, bitSize, hashCount, out MayExist);
         }
 
         public ErrorCode Contains(string key, out bool MayExist)
@@ -94,90 +110,38 @@ namespace kv_store.Implementations
             return Contains(Encoding.UTF8.GetBytes(key), out MayExist);
         }
 
-        public byte[]? GetBytes => bitArray?.Serialize;
-
-        public class ImmutableBloomFilter(
-            ReadOnlySpan<byte> filterBytes,
-            long bitSize,
-            int hashCount
-        )
-        {
-            readonly ImmutableBitArray bitArray = new(filterBytes);
-
-            public ErrorCode Contains(ReadOnlySpan<byte> key, out bool MayExist)
-            {
-                if (bitArray == null)
-                {
-                    MayExist = true;
-                    return ErrorCode.UnInitializedInstance;
-                }
-
-                for (int i = 0; i < hashCount; i++)
-                {
-                    if (!bitArray.Get(HashHelper.G(key, i, bitSize)))
-                    {
-                        MayExist = false;
-                        return ErrorCode.None;
-                    }
-                }
-                MayExist = true;
-                return ErrorCode.None;
-            }
-
-            public ErrorCode Contains(string key, out bool MayExist)
-            {
-                return Contains(Encoding.UTF8.GetBytes(key), out MayExist);
-            }
-        }
+        public byte[]? GetBytes => bitArray.Serialize;
     }
 
-    public class BitArrayManipulator
+    public class BitArrayManipulator(long BitCapacity)
     {
-        readonly byte[] BitArray;
-
-        public BitArrayManipulator(long BitCapacity)
-        {
-            BitArray = new byte[(BitCapacity + 7) / 8];
-        }
+        readonly byte[] BitArray = new byte[(BitCapacity + 7) / 8];
 
         public void Set(ulong pos)
         {
             BitArray[ByteIndex(pos)] |= (byte)(1 << BitOffset(pos));
         }
 
-        public bool Get(ulong pos)
-        {
-            return (BitArray[ByteIndex(pos)] & (byte)(1 << BitOffset(pos))) != 0;
-        }
-
-        static int ByteIndex(ulong pos) => (int)pos >> 3;
-
-        static int BitOffset(ulong pos) => (int)pos & 7;
-
         public void Clear()
         {
             Array.Clear(BitArray);
         }
 
+        public byte[] GetBytes => BitArray;
+
         public byte[] Serialize => [.. BitArray];
+    }
 
-        public class ImmutableBitArray
+    public class ImmutableBloomFilter(byte[] filterBytes, long bitSize, int hashCount)
+    {
+        public ErrorCode Contains(ReadOnlySpan<byte> key, out bool MayExist)
         {
-            readonly byte[] BitArray;
+            return BitArrayContains(filterBytes, key, bitSize, hashCount, out MayExist);
+        }
 
-            public ImmutableBitArray(ReadOnlySpan<byte> bytes)
-            {
-                BitArray = [.. bytes];
-            }
-
-            public bool Get(ulong pos)
-            {
-                return (BitArray[ByteIndex(pos)] & (byte)(1 << BitOffset(pos))) != 0;
-            }
-
-            static int ByteIndex(ulong pos) => (int)pos >> 3;
-
-            static int BitOffset(ulong pos) => (int)pos & 7;
+        public ErrorCode Contains(string key, out bool MayExist)
+        {
+            return Contains(Encoding.UTF8.GetBytes(key), out MayExist);
         }
     }
 }

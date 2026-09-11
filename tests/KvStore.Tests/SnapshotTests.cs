@@ -138,7 +138,7 @@ public class SnapshotTests : IDisposable
         File.WriteAllBytes(snapPath, bytes);
 
         var store2 = new KeyValueStore();
-        Assert.Equal(ErrorCode.CorruptedEntry, LoadSnapshot(store2));
+        Assert.Equal(ErrorCode.EntryIsCorrupted, LoadSnapshot(store2));
     }
 
     [Fact]
@@ -153,7 +153,7 @@ public class SnapshotTests : IDisposable
         byte[] bytes = File.ReadAllBytes(snapPath);
         File.WriteAllBytes(snapPath, bytes.Take(3).ToArray()); // chop after count header
 
-        Assert.Equal(ErrorCode.CorruptedEntry, LoadSnapshot(new KeyValueStore()));
+        Assert.Equal(ErrorCode.EntryIsCorrupted, LoadSnapshot(new KeyValueStore()));
     }
 
     [Fact]
@@ -205,7 +205,7 @@ public class SnapshotTests : IDisposable
         var store2 = new KeyValueStore();
         Assert.Equal(ErrorCode.None, LoadSnapshot(store2));
         System.Console.WriteLine($"From Here");
-        Assert.Equal(ErrorCode.KeyDeleted, store2.TryGet("k", out _));
+        Assert.Equal(ErrorCode.KeyWasDeleted, store2.TryGet("k", out _));
         System.Console.WriteLine($"To There");
         Assert.Equal(ErrorCode.None, store2.TryGet("a", out var va));
         Assert.Equal([1], va);

@@ -1,64 +1,64 @@
-using System.ComponentModel;
+using static kv_store.Enums.ErrorCode;
 
 namespace kv_store.Enums
 {
     public enum ErrorCode
     {
-        [Description("No error occurred")]
         None,
 
-        [Description("The provided value is not valid")]
-        ValueNotValid,
+        ValueIsInvalid,
 
-        [Description("The provided key is not valid")]
-        KeyNotValid,
+        KeyIsInvalid,
 
-        [Description("The specified key was not found")]
-        KeyNotFound,
+        KeyWasNotFound,
 
-        [Description("Entry is empty")]
         EntryIsEmpty,
 
-        [Description("File is empty")]
         FileIsEmpty,
 
-        [Description("The specified path is invalid")]
-        InvalidPath,
+        PathIsInvalid,
 
-        [Description("The arguments provided are invalid")]
-        InvalidArguments,
+        ArgumentsAreInvalid,
 
-        [Description("Instance has not been initialized")]
-        UnInitializedInstance,
+        InstanceIsNotInitialized,
 
-        [Description("The operation is invalid for the current state")]
-        InvalidOperation,
+        OperationIsInvalid,
 
-        [Description("An unexpected hashing failure occurred")]
-        UnExpectedHashingFailure,
+        HashingFailedUnexpectedly,
 
-        [Description("Entry is corrupted")]
-        CorruptedEntry,
+        EntryIsCorrupted,
 
-        [Description("An I/O error occurred")]
-        IOError,
+        InputOutputFailed,
 
-        [Description("Access to the resource was denied")]
         AccessDenied,
 
-        [Description("An unexpected error occurred")]
-        UnexpectedError,
+        UnexpectedFailure,
 
-        [Description("Immutable instance can't be written to")]
-        WriteToImmutableInstance,
+        CannotWriteToImmutableInstance,
 
-        [Description("File Corrupted Or Unsupported Version")]
-        FileCorruptedOrUnsupportedVersion,
+        FileIsCorruptedOrVersionUnsupported,
 
-        [Description("An Error Occurred while loading SSTables")]
-        ErrorInSSTablesLoading,
+        SstablesFailedToLoad,
 
-        [Description("Tombstone was returned")]
-        KeyDeleted,
+        KeyWasDeleted,
+    }
+
+    static class MapExToEr
+    {
+        public static ErrorCode GetErrorCode(Exception ex) =>
+            ex switch
+            {
+                null => UnexpectedFailure,
+                PathTooLongException
+                or NotSupportedException
+                or DirectoryNotFoundException
+                or FileNotFoundException => PathIsInvalid,
+                UnauthorizedAccessException => AccessDenied,
+
+                EndOfStreamException => EntryIsCorrupted,
+                ObjectDisposedException => InstanceIsNotInitialized,
+                IOException => InputOutputFailed,
+                _ => UnexpectedFailure,
+            };
     }
 }

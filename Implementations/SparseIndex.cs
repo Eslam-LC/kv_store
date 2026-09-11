@@ -1,8 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using kv_store.Enums;
+using static kv_store.Enums.ErrorCode;
+using static kv_store.Enums.MapExToEr;
 
 namespace kv_store.Implementations
 {
@@ -15,16 +13,12 @@ namespace kv_store.Implementations
         public ErrorCode AddEntry(string key, long offset)
         {
             if (string.IsNullOrWhiteSpace(key))
-                return ErrorCode.KeyNotValid;
-            try
-            {
-                entries.Add(key, offset);
-            }
-            catch
-            {
-                return ErrorCode.UnexpectedError;
-            }
-            return ErrorCode.None;
+                return KeyIsInvalid;
+
+            if (!entries.Add(key, offset))
+                return UnexpectedFailure;
+
+            return None;
         }
 
         public ErrorCode WriteIndex(BinaryWriter binaryWriter)
@@ -36,20 +30,12 @@ namespace kv_store.Implementations
                     binaryWriter.Write(entry.Key);
                     binaryWriter.Write(entry.Value);
                 }
-                catch (ObjectDisposedException)
+                catch (Exception ex)
                 {
-                    return ErrorCode.UnInitializedInstance;
-                }
-                catch (IOException)
-                {
-                    return ErrorCode.IOError;
-                }
-                catch
-                {
-                    return ErrorCode.UnexpectedError;
+                    return GetErrorCode(ex);
                 }
             }
-            return ErrorCode.None;
+            return None;
         }
 
         public static ErrorCode ReadIndex(
@@ -58,37 +44,25 @@ namespace kv_store.Implementations
             out ImmutableSkipList<string, long> keyOffsetPairs
         )
         {
-            /*
-            decions to make:
-                parsing index continue on failure?
-                parsing becomes an atomic operation either it's all there or not?
-            */
             SkipList<string, long> tempList = [];
+            var error = None;
             long indexEnd = r.BaseStream.Position + IndexLength;
             try
             {
-                while (r.BaseStream.Position < indexEnd)
+                while (r.BaseStream.Position < indexEnd && error == None)
                 {
-                    var key = r.ReadString();
-                    var offset = r.ReadInt64();
-                    var success = tempList.Add(key, offset);
-                    if (!success)
-                        return ErrorCode.UnexpectedError;
+                    if (!tempList.Add(r.ReadString(), r.ReadInt64()))
+                        error = UnexpectedFailure;
                 }
             }
-            catch (ObjectDisposedException)
+            catch (Exception ex)
             {
-                return ErrorCode.UnInitializedInstance;
+                error = GetErrorCode(ex);
             }
-            catch
-            {
-                return ErrorCode.CorruptedEntry;
-            }
-            finally
-            {
-                keyOffsetPairs = new(tempList);
-            }
-            return ErrorCode.None;
+
+            keyOffsetPairs = new(tempList);
+
+            return error;
         }
     }
 }

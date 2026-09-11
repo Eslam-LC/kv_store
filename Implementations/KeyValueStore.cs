@@ -1,4 +1,5 @@
 using kv_store.Enums;
+using static kv_store.Enums.ErrorCode;
 
 namespace kv_store.Implementations
 {
@@ -12,11 +13,11 @@ namespace kv_store.Implementations
         public ErrorCode Put(string key, byte[] value)
         {
             if (!Mutable)
-                return ErrorCode.WriteToImmutableInstance;
+                return CannotWriteToImmutableInstance;
             if (key == null)
-                return ErrorCode.KeyNotValid;
+                return KeyIsInvalid;
             if (value == null)
-                return ErrorCode.ValueNotValid;
+                return ValueIsInvalid;
 
             var found = KVList.TryGetValue(key, out var oldValue);
             var deltaLength = oldValue == null ? value.Length : value.Length - oldValue.Length;
@@ -26,15 +27,15 @@ namespace kv_store.Implementations
 
             KVList[key] = value;
 
-            return ErrorCode.None;
+            return None;
         }
 
         public ErrorCode BulkInitialize(IDictionary<string, byte[]?> dict)
         {
             if (!Mutable)
-                return ErrorCode.WriteToImmutableInstance;
+                return CannotWriteToImmutableInstance;
             if (dict == null)
-                return ErrorCode.InvalidArguments;
+                return ArgumentsAreInvalid;
             try
             {
                 KVList = new(dict);
@@ -42,9 +43,9 @@ namespace kv_store.Implementations
             }
             catch
             {
-                return ErrorCode.UnexpectedError;
+                return UnexpectedFailure;
             }
-            return ErrorCode.None;
+            return None;
         }
 
         public ErrorCode TryGet(string key, out byte[]? value)
@@ -52,23 +53,23 @@ namespace kv_store.Implementations
             if (key == null)
             {
                 value = null;
-                return ErrorCode.KeyNotValid;
+                return KeyIsInvalid;
             }
 
             var success = KVList.TryGetValue(key, out value);
 
             if (success)
-                return (value != null) ? ErrorCode.None : ErrorCode.KeyDeleted;
+                return (value != null) ? None : KeyWasDeleted;
             else
-                return ErrorCode.KeyNotFound;
+                return KeyWasNotFound;
         }
 
         public ErrorCode Delete(string key)
         {
             if (!Mutable)
-                return ErrorCode.WriteToImmutableInstance;
+                return CannotWriteToImmutableInstance;
             if (key == null)
-                return ErrorCode.KeyNotValid;
+                return KeyIsInvalid;
 
             var found = KVList.TryGetValue(key, out var oldValue);
 
@@ -79,13 +80,13 @@ namespace kv_store.Implementations
 
             KVList[key] = null;
 
-            return ErrorCode.None;
+            return None;
         }
 
         public ErrorCode GetImmutableKVList(out ImmutableSkipList<string, byte[]?> keyValuePairs)
         {
             keyValuePairs = new(KVList);
-            return ErrorCode.None;
+            return None;
         }
 
         public int Count => KVList.Count;
@@ -93,9 +94,10 @@ namespace kv_store.Implementations
         public ErrorCode Clear()
         {
             if (!Mutable)
-                return ErrorCode.WriteToImmutableInstance;
+                return CannotWriteToImmutableInstance;
             KVList.Clear();
-            return ErrorCode.None;
+            memoryStorage = 0;
+            return None;
         }
 
         public ErrorCode MakeImmutable()
@@ -103,9 +105,9 @@ namespace kv_store.Implementations
             if (Mutable)
             {
                 Mutable = false;
-                return ErrorCode.None;
+                return None;
             }
-            return ErrorCode.WriteToImmutableInstance;
+            return CannotWriteToImmutableInstance;
         }
     }
 }

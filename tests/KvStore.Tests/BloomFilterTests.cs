@@ -16,10 +16,12 @@ public class BloomFilterTests
         return mayExist;
     }
 
-    static bool Present(ReadOnlySpan<byte> bytes, long bitSize, int hashCount, string key)
+    static bool Present(byte[] bytes, long bitSize, int hashCount, string key)
     {
-        var err = new BloomFilter.ImmutableBloomFilter(bytes, bitSize, hashCount)
-            .Contains(Key(key), out bool mayExist);
+        var err = new ImmutableBloomFilter(bytes, bitSize, hashCount).Contains(
+            Key(key),
+            out bool mayExist
+        );
         Assert.Equal(ErrorCode.None, err);
         return mayExist;
     }
@@ -65,8 +67,7 @@ public class BloomFilterTests
             Assert.True(Present(bytes!, m, k, $"in-{i}"));
 
         for (int i = 0; i < n; i++)
-            Assert.Equal(Present(filter, $"in-{i}"),
-                         Present(bytes!, m, k, $"in-{i}"));
+            Assert.Equal(Present(filter, $"in-{i}"), Present(bytes!, m, k, $"in-{i}"));
     }
 
     [Fact]

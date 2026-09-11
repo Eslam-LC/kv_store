@@ -46,12 +46,12 @@ public class SSTableTests : IDisposable
             SSTable.WriteTableToFile(path, new(entries), entries.Count, out var written)
         );
 
-        Assert.Equal(ErrorCode.None, SSTable.ReadFileToTable(path, out var table));
+        Assert.Equal(ErrorCode.None, SSTable.ReadFromFileToTable(path, out var table));
         Assert.NotNull(table);
-        Assert.Equal(25, table.RecordCount_);
-        Assert.Equal("key-000", table.FirstKey_);
-        Assert.Equal("key-024", table.LastKey_);
-        Assert.Equal(path, table.FileName_);
+        Assert.Equal(25, table.RecordCount);
+        Assert.Equal("key-000", table.FirstKey);
+        Assert.Equal("key-024", table.LastKey);
+        Assert.Equal(path, table.FileName);
 
         using var stream = File.OpenRead(path);
         using var reader = new BinaryReader(stream);
@@ -78,13 +78,13 @@ public class SSTableTests : IDisposable
             ErrorCode.None,
             SSTable.WriteTableToFile(path, new(entries), entries.Count, out _)
         );
-        Assert.Equal(ErrorCode.None, SSTable.ReadFileToTable(path, out var table));
+        Assert.Equal(ErrorCode.None, SSTable.ReadFromFileToTable(path, out var table));
 
         using var stream = File.OpenRead(path);
         using var reader = new BinaryReader(stream);
 
         // stride index: one entry per 10 records
-        foreach (var indexEntry in table!.SparseIndex_)
+        foreach (var indexEntry in table!.SparseIndex)
         {
             var expectedIdx = int.Parse(indexEntry.Key[4..]); // key-xxx -> xxx
 
@@ -112,8 +112,8 @@ public class SSTableTests : IDisposable
         File.WriteAllBytes(path, [0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03]);
 
         Assert.Equal(
-            ErrorCode.FileCorruptedOrUnsupportedVersion,
-            SSTable.ReadFileToTable(path, out _)
+            ErrorCode.FileIsCorruptedOrVersionUnsupported,
+            SSTable.ReadFromFileToTable(path, out _)
         );
     }
 
@@ -132,8 +132,8 @@ public class SSTableTests : IDisposable
         File.WriteAllBytes(path, bytes);
 
         Assert.Equal(
-            ErrorCode.FileCorruptedOrUnsupportedVersion,
-            SSTable.ReadFileToTable(path, out _)
+            ErrorCode.FileIsCorruptedOrVersionUnsupported,
+            SSTable.ReadFromFileToTable(path, out _)
         );
     }
 
@@ -143,7 +143,7 @@ public class SSTableTests : IDisposable
         var path = Path.Combine(tempDir, "SSTable-00012");
         File.WriteAllBytes(path, [0x53, 0x53, 0x54, 0x01, .. new byte[30]]);
 
-        Assert.Equal(ErrorCode.IOError, SSTable.ReadFileToTable(path, out _));
+        Assert.Equal(ErrorCode.InputOutputFailed, SSTable.ReadFromFileToTable(path, out _));
     }
 
     [Fact]
@@ -157,13 +157,77 @@ public class SSTableTests : IDisposable
             ErrorCode.None,
             SSTable.WriteTableToFile(path, new(pairs), pairs.Count, out _)
         );
-        Assert.Equal(ErrorCode.None, SSTable.ReadFileToTable(path, out var table));
+        Assert.Equal(ErrorCode.None, SSTable.ReadFromFileToTable(path, out var table));
 
         foreach (var k in new[] { "k-000", "k-001", "k-009", "k-010", "k-015", "k-024" })
         {
             var e = table!.TryReadEntry(k, out _);
             Assert.True(e == ErrorCode.None, $"{k}: {e}");
         }
+    }
+
+    [Fact]
+    public void WriteTableToFile_OutTable_IsQueryableImmediately()
+    {
+        var pairs = new List<KeyValuePair<string, byte[]?>>();
+        for (int i = 0; i < 25; i++)
+            pairs.Add(new($"k-{i:D3}", [(byte)i]));
+        pairs.Add(new("gone", null)); // tombstone
+
+        var path = Path.Combine(tempDir, "SSTable-00001");
+        Assert.Equal(
+            ErrorCode.None,
+            SSTable.WriteTableToFile(path, new(pairs), pairs.Count, out var table)
+        );
+
+        // the write path constructs the immutable side from the in-memory
+        // sections it just wrote; the object must be usable directly (no
+        // dependence on a re-read from disk)
+        Assert.NotNull(table);
+        Assert.Equal(pairs.Count, table.RecordCount);
+        Assert.Equal("gone", table.FirstKey); // sorts before k-000
+        Assert.Equal("k-024", table.LastKey);
+        Assert.Equal(3, table.SparseIndex.Count); // stride 10: i = 0, 10, 20
+        Assert.Equal(ErrorCode.None, table.TryReadEntry("k-000", out _));
+        Assert.Equal(ErrorCode.None, table.TryReadEntry("k-009", out var v9));
+        Assert.Equal([9], v9);
+        Assert.Equal(ErrorCode.KeyWasDeleted, table.TryReadEntry("gone", out _));
+    }
+
+    [Fact]
+    public void TryReadEntry_InRangeAbsentKey_ReturnsKeyNotFound()
+    {
+        var pairs = new List<KeyValuePair<string, byte[]?>>();
+        for (int i = 0; i < 25; i++)
+            pairs.Add(new($"k-{i:D3}", [(byte)i]));
+        var path = Path.Combine(tempDir, "SSTable-00001");
+        Assert.Equal(
+            ErrorCode.None,
+            SSTable.WriteTableToFile(path, new(pairs), pairs.Count, out _)
+        );
+
+        // Force bloom to say "maybe" for the absent key so the scan actually
+        // walks past it, exercising the mismatch branch deterministically.
+        var bytes = File.ReadAllBytes(path);
+        using var ms = new MemoryStream(bytes);
+        using var r = new BinaryReader(ms);
+        ms.Position = bytes.Length - 52; // footer, fixed size
+        r.ReadInt64(); // IndexOffset
+        r.ReadInt32(); // IndexLength
+        long filterOffset = r.ReadInt64();
+        int filterLength = r.ReadInt32();
+
+        var seed = new BloomFilter(pairs.Count);
+        Assert.Equal(ErrorCode.None, seed.Add("k-005a"));
+        var mask = seed.GetBytes!;
+        for (int i = 0; i < filterLength; i++)
+            bytes[filterOffset + i] |= mask[i];
+        File.WriteAllBytes(path, bytes);
+
+        Assert.Equal(ErrorCode.None, SSTable.ReadFromFileToTable(path, out var table));
+
+        // in range, bloom passes, sparse lands at k-000, scan stops at k-006 -> legit miss
+        Assert.Equal(ErrorCode.KeyWasNotFound, table!.TryReadEntry("k-005a", out _));
     }
 
     [Fact]
@@ -180,7 +244,7 @@ public class SSTableTests : IDisposable
             ErrorCode.None,
             SSTable.WriteTableToFile(path, new(pairs), pairs.Count, out _)
         );
-        Assert.Equal(ErrorCode.None, SSTable.ReadFileToTable(path, out var table));
+        Assert.Equal(ErrorCode.None, SSTable.ReadFromFileToTable(path, out var table));
 
         using var stream = File.OpenRead(path);
         using var reader = new BinaryReader(stream);
@@ -194,7 +258,7 @@ public class SSTableTests : IDisposable
             Assert.Equal(key == "k-001" ? WAOperation.DELETE : WAOperation.PUT, op);
         }
 
-        Assert.Equal(ErrorCode.KeyDeleted, table!.TryReadEntry("k-001", out _));
+        Assert.Equal(ErrorCode.KeyWasDeleted, table!.TryReadEntry("k-001", out _));
         Assert.Equal(ErrorCode.None, table.TryReadEntry("k-000", out var v0));
         Assert.Equal([1], v0);
         Assert.Equal(ErrorCode.None, table.TryReadEntry("k-002", out var v2));

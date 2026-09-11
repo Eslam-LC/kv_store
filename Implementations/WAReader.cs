@@ -1,8 +1,6 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using kv_store.Enums;
+using static kv_store.Enums.ErrorCode;
+using static kv_store.Enums.WAOperation;
 
 namespace kv_store.Implementations
 {
@@ -11,36 +9,28 @@ namespace kv_store.Implementations
         public static ErrorCode ReadRecords(BinaryReader r, in KeyValueStore kvs)
         {
             if (r.BaseStream.Length == 0)
-                return ErrorCode.FileIsEmpty;
+                return FileIsEmpty;
 
             do
             {
                 ErrorCode errorCode = WARecord.ReadFrame(r, out var op, out var key, out var value);
-                if (errorCode != ErrorCode.None)
-                    return errorCode; // Maybe Handle Returns like engine??
+                if (errorCode != None)
+                    return errorCode;
 
-                if (op == null || key == null || (op == WAOperation.PUT && value == null))
-                    return ErrorCode.UnexpectedError;
+                // Read Frame guarntees non-null values if error code is none should start making documentation some day
 
                 errorCode = op switch
                 {
-                    WAOperation.PUT => kvs.Put(key, value!),
-                    WAOperation.DELETE => kvs.Delete(key),
-                    _ => ErrorCode.InvalidOperation,
+                    PUT => kvs.Put(key!, value!),
+                    DELETE => kvs.Delete(key!),
+                    _ => OperationIsInvalid,
                 };
 
-                if (errorCode == ErrorCode.KeyNotFound && op == WAOperation.DELETE)
-                {
-                    // if !FindKey return notFound.
-                    // remmember to write this type of entry (delete found keys that are not in memory) in sstable
-                    continue;
-                }
-
-                if (errorCode != ErrorCode.None)
+                if (errorCode != None)
                     return errorCode;
             } while (r.BaseStream.Position < r.BaseStream.Length);
 
-            return ErrorCode.None;
+            return None;
         }
     }
 }
