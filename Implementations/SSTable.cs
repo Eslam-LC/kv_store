@@ -360,22 +360,20 @@ namespace kv_store.Implementations
             List<KeyValuePair<string, byte[]?>> keyValues = [];
 
             reader.BaseStream.Seek(offset, SeekOrigin.Begin);
-            ErrorCode errCode = WARecord.ReadFrame(
-                reader,
-                out var op,
-                out string? fetchedKey,
-                out var value
-            );
+            ErrorCode errCode = None;
 
-            while (
-                errCode == None
-                && fetchedKey != null
-                && endKey.CompareTo(fetchedKey, StringComparison.Ordinal) > 0
-                && reader.BaseStream.Position < footerTag.IndexOffset
-            )
+            while (errCode == None && reader.BaseStream.Position < footerTag.IndexOffset)
             {
-                keyValues.Add(new(fetchedKey, op == DELETE ? Deleted : value));
-                errCode = WARecord.ReadFrame(reader, out op, out fetchedKey, out value!);
+                errCode = WARecord.ReadFrame(reader, out var op, out var fetchedKey, out var value);
+
+                if (fetchedKey == null)
+                    return EntryIsCorrupted;
+
+                if (endKey.CompareTo(fetchedKey, StringComparison.Ordinal) < 0)
+                    break;
+
+                if (fetchedKey.CompareTo(startKey, StringComparison.Ordinal) >= 0)
+                    keyValues.Add(new(fetchedKey, op == DELETE ? Deleted : value));
             }
 
             pairs = keyValues;

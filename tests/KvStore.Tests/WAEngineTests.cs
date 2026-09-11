@@ -340,8 +340,9 @@ public class WAEngineTests : IDisposable
         Assert.Equal(big, vBig);
     }
 
-    static List<KeyValuePair<string, byte[]?>> Scan(WAEngine engine, string startKey, string endKey)
+    static List<KeyValuePair<string, byte[]>> Scan(WAEngine engine, string startKey, string endKey)
     {
+        System.Console.WriteLine($"sk: {startKey}, ek:{endKey}");
         Assert.Equal(ErrorCode.None, engine.Scan(startKey, endKey, out var results));
         return [.. results];
     }
@@ -380,7 +381,7 @@ public class WAEngineTests : IDisposable
         Assert.Equal(ErrorCode.None, engine.Put("m", [1]));
 
         var results = Scan(engine, "m", "m");
-        Assert.Equal([new KeyValuePair<string, byte[]?>("m", [1])], results);
+        Assert.Equal([new KeyValuePair<string, byte[]>("m", [1])], results);
     }
 
     [Fact]
@@ -447,22 +448,23 @@ public class WAEngineTests : IDisposable
         Assert.Equal(ErrorCode.None, engine.Init(out _));
 
         Assert.Equal(ErrorCode.None, engine.Put("a", [1]));
+        Assert.Equal(ErrorCode.None, engine.Put("b", [5]));
         var big1 = new byte[40_000];
         Random.Shared.NextBytes(big1);
-        Assert.Equal(ErrorCode.None, engine.Put("zz", big1)); // flush table 1
+        Assert.Equal(ErrorCode.None, engine.Put("zz", big1)); // flush table 1 {a:1, b:5}
 
         Assert.Equal(ErrorCode.None, engine.Put("a", [2]));
-        Assert.Equal(ErrorCode.None, engine.Put("b", [3]));
         var big2 = new byte[40_000];
         Random.Shared.NextBytes(big2);
-        Assert.Equal(ErrorCode.None, engine.Put("yy", big2)); // flush table 2
+        Assert.Equal(ErrorCode.None, engine.Put("yy", big2)); // flush table 2 {a:2}
 
-        var results = Scan(engine, "a", "z");
-        Assert.Equal(3, results.Count);
+        // "a" flushed into both tables -> newest table wins; "b" exists only in table 1 -> still visible
+        var results = Scan(engine, "a", "b");
+        Assert.Equal(2, results.Count);
         Assert.Equal("a", results[0].Key);
         Assert.Equal([2], results[0].Value); // newest table wins
         Assert.Equal("b", results[1].Key);
-        Assert.Equal("zz", results[2].Key);
+        Assert.Equal([5], results[1].Value); // older table still visible
     }
 
     [Fact]

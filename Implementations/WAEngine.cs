@@ -18,7 +18,6 @@ namespace kv_store.Implementations
         string SSTableBaseName = "SSTable"
     )
     {
-        // TODO Implement Scan Command, What does make since for a REPL program and what makes sense in general.
         KeyValueStore? MemStore;
         readonly List<KeyValueStore> Frozen_ = [];
 
@@ -206,24 +205,23 @@ namespace kv_store.Implementations
         public ErrorCode Scan(
             string startKey,
             string endKey,
-            out IEnumerable<KeyValuePair<string, byte[]?>> results
+            out IEnumerable<KeyValuePair<string, byte[]>> results
         )
         {
+            results = [];
             if (MemStore == null)
             {
                 results = [];
                 return InstanceIsNotInitialized;
             }
-            SkipList<string, byte[]?> keyValues = [];
+            SkipList<string, byte[]> keyValues = [];
             ErrorCode errorCode = MemStore.Scan(startKey, endKey, out var pairs);
             if (errorCode != None)
-            {
-                results = [];
                 return errorCode;
-            }
+
             foreach (var item in pairs)
             {
-                keyValues.AddWithoutUpdate(item.Key, item.Value);
+                keyValues.AddWithoutUpdate(item.Key, item.Value ?? Deleted!);
             }
 
             for (int i = Frozen_.Count - 1; i >= 0; i--)
@@ -231,22 +229,23 @@ namespace kv_store.Implementations
                 KeyValueStore l = Frozen_[i];
                 errorCode = l.Scan(startKey, endKey, out pairs);
                 if (errorCode != None)
-                {
-                    results = [];
                     return errorCode;
-                }
+
                 foreach (var item in pairs)
                 {
-                    keyValues.AddWithoutUpdate(item.Key, item.Value);
+                    keyValues.AddWithoutUpdate(item.Key, item.Value ?? Deleted!);
                 }
             }
 
             foreach (var table in immutableSSTables)
             {
                 errorCode = table.Scan(startKey, endKey, out pairs);
+                if (errorCode != None)
+                    return errorCode;
+
                 foreach (var item in pairs)
                 {
-                    keyValues.AddWithoutUpdate(item.Key, item.Value);
+                    var _ = keyValues.AddWithoutUpdate(item.Key, item.Value ?? Deleted!);
                 }
             }
 

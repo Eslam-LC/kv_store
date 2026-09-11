@@ -204,9 +204,7 @@ public class SnapshotTests : IDisposable
         Assert.Equal(ErrorCode.None, SaveSnapshot(store));
         var store2 = new KeyValueStore();
         Assert.Equal(ErrorCode.None, LoadSnapshot(store2));
-        System.Console.WriteLine($"From Here");
         Assert.Equal(ErrorCode.KeyWasDeleted, store2.TryGet("k", out _));
-        System.Console.WriteLine($"To There");
         Assert.Equal(ErrorCode.None, store2.TryGet("a", out var va));
         Assert.Equal([1], va);
     }

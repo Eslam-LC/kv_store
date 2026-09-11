@@ -10,7 +10,7 @@ namespace kv_store
     {
         static void Main(string[] args)
         {
-            ErrorCode errCode;
+            ErrorCode errorCode;
 
             var dataDirOption = new Option<DirectoryInfo>("--data-dir", "-d")
             {
@@ -26,6 +26,15 @@ namespace kv_store
 
             var keyArgument = new Argument<string>("key") { Description = "the key of the entry" };
             var valueArgument = new Argument<string[]>("value") { Description = "value to insert" };
+            var startKeyArgument = new Argument<string>("startKey")
+            {
+                Description = "the start key (inclusive)",
+            };
+            var endKeyArgument = new Argument<string>("endKey")
+            {
+                Description = "the end key (inclusive)",
+            };
+
             var pathArgument = new Argument<string?>("path")
             {
                 Description = "snapshot file's path",
@@ -62,6 +71,11 @@ namespace kv_store
                 "replay",
                 "appends entries in the write ahead log file"
             );
+            var scanCommand = new Command("scan", "gets all entries between two keys")
+            {
+                Arguments = { startKeyArgument, endKeyArgument },
+                Options = { hexOption },
+            };
             var exitCommand = new Command("exit", "closes the program.");
 
             var rootCommand = new RootCommand("A write ahead logger with snapshot feature.")
@@ -89,19 +103,19 @@ namespace kv_store
                 dir.Create();
 
             var Engine = new WAEngine(dir.FullName); // later on the configs may include file names.
-            errCode = Engine.Init(out var errors);
-            if (errCode != None)
+            errorCode = Engine.Init(out var errors);
+            if (errorCode != None)
             {
-                if (errCode == SstablesFailedToLoad)
+                if (errorCode == SstablesFailedToLoad)
                 {
                     foreach (var (e, f) in errors)
                     {
-                        Console.WriteLine($"Error {errCode} \nWhen loading file {f}");
+                        Console.WriteLine($"Error {errorCode} \nWhen loading file {f}");
                     }
                 }
                 else
                 {
-                    Console.WriteLine($"Engine initialization error: {errCode}");
+                    Console.WriteLine($"Engine initialization error: {errorCode}");
                 }
             }
 
@@ -166,10 +180,8 @@ namespace kv_store
                     ErrorMessage = $"Error: {errCode}.";
                     return;
                 }
-                if (hex)
-                    SuccessMessage = $"{key} : {PrintByteArray(value!)}";
-                else
-                    SuccessMessage = $"{key} : {PrintByteArrayAsString(value!)}";
+                SuccessMessage =
+                    $"Retrieved '{key}' ({(hex ? PrintByteArray(value!) : PrintByteArrayAsString(value!))?.Length ?? 0} chars).";
             });
 
             deleteCommand.SetAction(parseResult =>
@@ -241,14 +253,38 @@ namespace kv_store
 
             replayCommand.SetAction(parseResult =>
             {
-                ErrorCode errCode;
-                errCode = Engine.ReplayRecords();
-                if (errCode != None)
+                errorCode = Engine.ReplayRecords();
+                if (errorCode != None)
                 {
-                    ErrorMessage = $"Error: {errCode}.";
+                    ErrorMessage = $"Error: {errorCode}.";
                     return;
                 }
                 SuccessMessage = $"WAL restored.";
+            });
+
+            scanCommand.SetAction(parseResult =>
+            {
+                var startKey = parseResult.GetValue(startKeyArgument);
+                var endKey = parseResult.GetValue(endKeyArgument);
+                var hex = parseResult.GetValue(hexOption);
+                if (string.IsNullOrWhiteSpace(startKey) || string.IsNullOrWhiteSpace(endKey))
+                {
+                    ErrorMessage = $"Error: {KeyIsInvalid}.";
+                    return;
+                }
+                errorCode = Engine.Scan(startKey, endKey, out var results);
+                if (errorCode != None)
+                {
+                    ErrorMessage = $"Error: {errorCode}.";
+                    return;
+                }
+                var resultsArray = results.ToArray();
+                if (hex)
+                    BrettyPrintHex(resultsArray);
+                else
+                    BrettyPrintRaw(resultsArray);
+                SuccessMessage =
+                    $"Scanned '{startKey}'..'{endKey}': {resultsArray.Length} pair(s).";
             });
 
             exitCommand.SetAction(parseResult =>
@@ -323,6 +359,36 @@ namespace kv_store
                 return null;
 
             return Encoding.UTF8.GetString(ba);
+        }
+
+        static void BrettyPrintRaw(KeyValuePair<string, byte[]>[] pairs)
+        {
+            if (pairs == null || pairs.Length == 0)
+                return;
+
+            Console.WriteLine($"{"Key", -20}{"Value", -50}");
+            Console.WriteLine(new string('-', 70));
+
+            foreach (var item in pairs)
+            {
+                var value = PrintByteArrayAsString(item.Value) ?? string.Empty;
+                Console.WriteLine($"{item.Key, -20}{value, -50}");
+            }
+        }
+
+        static void BrettyPrintHex(KeyValuePair<string, byte[]>[] pairs)
+        {
+            if (pairs == null || pairs.Length == 0)
+                return;
+
+            Console.WriteLine($"{"Key", -20}{"Value", -50}");
+            Console.WriteLine(new string('-', 70));
+
+            foreach (var item in pairs)
+            {
+                var value = PrintByteArray(item.Value) ?? string.Empty;
+                Console.WriteLine($"{item.Key, -20}{value, -50}");
+            }
         }
 
         static void ExecuteExitRoutine()

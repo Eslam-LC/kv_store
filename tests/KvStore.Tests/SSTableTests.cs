@@ -264,4 +264,73 @@ public class SSTableTests : IDisposable
         Assert.Equal(ErrorCode.None, table.TryReadEntry("k-002", out var v2));
         Assert.Equal([2], v2);
     }
+
+    static List<KeyValuePair<string, byte[]?>> MakeScanPairs()
+    {
+        return
+        [
+            new("alpha", [1]),
+            new("beta", [2]),
+            new("gamma", [3]),
+            new("zz", [4]),
+        ];
+    }
+
+    [Fact]
+    public void Scan_InclusiveEndKey_IncludesEqualBoundary()
+    {
+        var pairs = MakeScanPairs();
+        var path = Path.Combine(tempDir, "SSTable-00001");
+        Assert.Equal(ErrorCode.None, SSTable.WriteTableToFile(path, new(pairs), pairs.Count, out _));
+        Assert.Equal(ErrorCode.None, SSTable.ReadFromFileToTable(path, out var table));
+
+        Assert.Equal(ErrorCode.None, table!.Scan("alpha", "beta", out var scanResults));
+        List<KeyValuePair<string, byte[]?>> rows = [.. scanResults];
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("alpha", rows[0].Key);
+        Assert.Equal("beta", rows[1].Key);
+    }
+
+    [Fact]
+    public void Scan_StartKeyInsidePage_ExcludesRecordsBeforeStart()
+    {
+        var pairs = MakeScanPairs();
+        var path = Path.Combine(tempDir, "SSTable-00001");
+        Assert.Equal(ErrorCode.None, SSTable.WriteTableToFile(path, new(pairs), pairs.Count, out _));
+        Assert.Equal(ErrorCode.None, SSTable.ReadFromFileToTable(path, out var table));
+
+        // sparse index seeks to "alpha" (only entry), but "alpha" < "beta" is out of range
+        Assert.Equal(ErrorCode.None, table!.Scan("beta", "zzz", out var scanResults));
+        List<KeyValuePair<string, byte[]?>> rows = [.. scanResults];
+        Assert.Equal(3, rows.Count);
+        Assert.Equal("beta", rows[0].Key);
+        Assert.Equal("gamma", rows[1].Key);
+        Assert.Equal("zz", rows[2].Key);
+    }
+
+    [Fact]
+    public void Scan_InRangeTombstone_ComesThroughAsDeleted()
+    {
+        var pairs = new List<KeyValuePair<string, byte[]?>>
+        {
+            new("a", [1]),
+            new("b", [2]),
+            new("gone", null),
+        };
+        var path = Path.Combine(tempDir, "SSTable-00001");
+        Assert.Equal(ErrorCode.None, SSTable.WriteTableToFile(path, new(pairs), pairs.Count, out _));
+        Assert.Equal(ErrorCode.None, SSTable.ReadFromFileToTable(path, out var table));
+
+        Assert.Equal(ErrorCode.None, table!.Scan("a", "zz", out var results));
+        List<KeyValuePair<string, byte[]?>> rows = [.. results];
+        Assert.Equal(3, rows.Count);
+        Assert.Equal("a", rows[0].Key);
+        Assert.NotNull(rows[0].Value);
+        Assert.Equal("b", rows[1].Key);
+        Assert.NotNull(rows[1].Value);
+        // tombstone row must surface as a null value so the engine's merge
+        // sees the key as deleted and can shadow older stores
+        Assert.Equal("gone", rows[2].Key);
+        Assert.Null(rows[2].Value);
+    }
 }
