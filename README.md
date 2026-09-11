@@ -21,6 +21,9 @@ frozen and flushed to a sorted, immutable SSTable, keeping the WAL append-only.
 - **SSTable flushing** — writes are accumulated in memory; crossing a size
   threshold freezes the store and flushes it to a sorted, immutable table
   searchable via a bloom filter and sparse index.
+- **Range scans** — `scan <start-key> <end-key>` returns every live entry in an
+  inclusive range, merged newest-first across the memtable, frozen stores, and
+  SSTables; tombstones shadow older data and never resurrect.
 - **Corruption isolation** — a corrupted/unsupported SSTable is quarantined
   (renamed `*.corrupt`) and reported; the rest of the store still loads.
 - **Binary values** — store and retrieve raw bytes in hex via `puthex`/`gethex`,
@@ -66,6 +69,7 @@ Interactive REPL. Commands:
 | `get <key>`             | Print the value as a UTF-8 string.                                                                                |
 | `gethex <key>`          | Print the value as space-separated hex bytes.                                                                     |
 | `delete <key>`          | Remove a key.                                                                                                     |
+| `scan <start> <end>`    | Print every live entry in the inclusive `[start, end]` range, merged newest-first. `-x` shows values as hex.     |
 | `snapshot save [path]`  | Save the full dataset, then truncate the WAL.                                                                     |
 | `snapshot load [path]`  | Load a snapshot into the store.                                                                                   |
 | `replay`                | Append WAL records to the store.                                                                                  |
@@ -86,9 +90,19 @@ key: name was inserted.
 > puthex flag DEADBEEF
 key: flag was inserted.
 > get name
-name : hello world
+Retrieved 'name' (11 chars).
 > gethex flag
-flag : DE AD BE EF
+Retrieved 'flag' (11 chars).
+> put a foo
+key: a was inserted.
+> put b bar
+key: b was inserted.
+> scan a c
+Key                 Value                                              
+----------------------------------------------------------------------
+a                   foo                                               
+b                   bar                                               
+Scanned 'a'..'c': 2 pair(s).
 > snapshot save
 snapshot saved.
 > replay

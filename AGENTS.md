@@ -1,6 +1,6 @@
 # KV Store
 
-LSM-style key/value store. C# / .NET 10 console app (System.CommandLine REPL) with storage logic in `Implementations/`. See `README.md` (usage), `docs/DESIGN.md` (architecture) — keep both in sync when on-disk formats change — and `docs/ROADMAP.md` (milestone plan). Current milestone: **M2 LSM-tree in progress** (SSTable flush + bloom + sparse index; compaction and range queries next).
+LSM-style key/value store. C# / .NET 10 console app (System.CommandLine REPL) with storage logic in `Implementations/`. See `README.md` (usage), `docs/DESIGN.md` (architecture) — keep both in sync when on-disk formats change — and `docs/ROADMAP.md` (milestone plan). Current milestone: **M2 LSM-tree near-complete** (SSTable flush + bloom + sparse index + range scans shipped; only compaction remains before M3).
 
 ## Commands
 
@@ -8,7 +8,7 @@ LSM-style key/value store. C# / .NET 10 console app (System.CommandLine REPL) wi
 - Test all: `dotnet test tests/KvStore.Tests/KvStore.Tests.csproj`
 - One test: `dotnet test tests/KvStore.Tests/KvStore.Tests.csproj --filter "FullyQualifiedName~WAEngineTests.Flush_TwoTables"`
 - Run REPL: `dotnet run` from repo root (default `./data` dir), or `dotnet run -- --data-dir /tmp/kv`
-- REPL commands: `put`, `get`, `delete`, `snapshot save|load`, `replay`, `exit`. Values are UTF-8 text; hex via `puthex`/`gethex` or `0x` prefix.
+- REPL commands: `put`, `get`, `delete`, `scan <start> <end>`, `snapshot save|load`, `replay`, `exit`. Values are UTF-8 text; hex via `puthex`/`gethex`, a `0x` prefix, or `-x` on `scan`.
 
 ## Workflow rules (project convention)
 
@@ -16,7 +16,7 @@ LSM-style key/value store. C# / .NET 10 console app (System.CommandLine REPL) wi
 - **When reminding about a commit, suggest a concrete commit message** (short, imperative, matches existing history style) so the user can commit without hunting for a message.
 - **Update `AGENTS.md` after major changes.** When a task significantly changes architecture, commands, on-disk formats, or workflow (not cosmetic edits), remind the user to update `AGENTS.md` (and `README.md`/`docs/DESIGN.md` if affected) so future sessions get accurate project state.
 - **Diff-first debugging.** Before diagnosing, run `git log --oneline -5` and `git diff` on the file in question — most bugs here were introduced by the last uncommitted refactor, not ancient code.
-- **Split-brain editing (critical):** assistant edits tests (`tests/KvStore.Tests/`) directly. Product code (`Program.cs`, `Implementations/`, `Enums/`) is only ever *proposed* — the user applies those edits.
+- **Split-brain editing (critical):** assistant edits tests (`tests/KvStore.Tests/`) directly. Product code (`Program.cs`, `Implementations/`, `EnumsAndConstants/`) is only ever *proposed* — the user applies those edits.
 - **Explain before code (critical):** for product changes, never dump code first. State in natural language what must change, why, and the design decisions (semantics, edge cases, ordering), then wait for the user to ask for code. The user implements by hand to learn how requirements shape code. Tests are exempt — assistant may write those directly.
 - Any transient product-code instrumentation must be announced (file:line), run, then reverted before the task ends.
 
@@ -26,12 +26,15 @@ LSM-style key/value store. C# / .NET 10 console app (System.CommandLine REPL) wi
 - **Memory accounting is byte-delta based** (`KeyValueStore.Put`/`Delete`): an absent-key delete still adds the key's bytes (tombstone node keeps them in the skip list). Pin tests: `KeyValueStoreTests.Delete_LiveKey_CountsKeyBytesOnce_ForTombstone`, `Delete_AbsentKey_CountsKeyBytes_ForTombstone`.
 - **Record frame** (WAL / snapshot / SSTable): `[crc32 4B][op 1B][key][vlen 4B + value, PUT only]`. DELETE carries no value (replays as `null`).
 - **SSTable file layout**: `[magic4][records][sparse index][bloom bytes][first/last key][Footer]`. Footer is fixed 52B; read by `Seek(-52, End)`. Newest table sits first in `immutableSSTables`; `TryReadEntry` lazily opens the file.
+- **Range scan = newest-first first-wins merge.** Each source returns its raw sorted snapshot (tombstones included); `WAEngine.Scan` folds them into a `SkipList` via `AddWithoutUpdate` (insert-if-absent, so the newest write or tombstone wins; returns `false` when shadowed — that is *normal*, not an error, unlike `Add`). Tombstones occupy the slot as `null`, then `.Where(kv => kv.Value != Deleted)` drops them. Inclusive `[startKey, endKey]`. `ImmutableSSTable.Scan` clamps the sparse seek offset to ≥ 4 (post-magic; `GetValueAtOrBefore` returns head value 0 for out-of-range starts) and must gate reads with `Position < IndexOffset` or the table's last in-range record gets dropped.
 - **Serial numbering gotcha**: the generated regex `^SSTable-([0-9]{5})$` **must keep its capture group** — serial extraction reads `Groups[1]`. Without the `(...)`, `Groups[1]` is `""`, serial always resolves to 0, and every flush targets `SSTable-00001` (collision → `File.Move` throws `IOException`). One char of polish here broke 2 flush tests.
-- **Error code names were renamed.** `Enums/ErrorCode.cs` now uses `InputOutputFailed`, `KeyWasNotFound`, `InstanceIsNotInitialized`, etc. (legacy `IOError`/`KeyNotFound`/`UnInitializedInstance` don't exist). `MapExToEr.GetErrorCode` maps exception types to codes.
+- **Error code names were renamed.** `EnumsAndConstants/ErrorCode.cs` now uses `InputOutputFailed`, `KeyWasNotFound`, `InstanceIsNotInitialized`, etc. (legacy `IOError`/`KeyNotFound`/`UnInitializedInstance` don't exist). `MapExToEr.GetErrorCode` maps exception types to codes.
 - `WAReader` carries a dead `KeyNotFound && DELETE → continue` branch — candidate for deletion.
 
 ## Testing quirks
 
 - Every test creates a fresh GUID temp dir under `Path.GetTempPath()` and cleans up best-effort. No shared fixtures, no ordering guarantees.
-- Test project mirrors source classes one-to-one (`WAEngineTests.cs`, `SSTableTests.cs`, `BloomFilterTests.cs`, ...).
+- Test project mirrors source classes one-to-one (`WAEngineTests.cs`, `SSTableTests.cs`, `BloomFilterTests.cs`, `ProgramTests.cs`, ...).
+- `ProgramTests` drives the REPL command tree with zero I/O: `Program.BuildRootCommand(new ReplContext())` then `Parse(...)`. Gate: `<InternalsVisibleTo>` **must live in `kv-store.csproj`** (the owner declares the grant — putting it in the test csproj does nothing). Parse args are read back via `ctx.StartKeyArgument` / `ctx.EndKeyArgument`.
+- Gotcha: a `Command` constructed and given a `SetAction` is still inert until it's in `rootCommand.Subcommands` — `scan` was missed once and vanished from the REPL (help didn't list it; parse errors everywhere).
 - Only dependencies: `System.CommandLine`, `System.IO.Hashing`.

@@ -76,7 +76,9 @@ flowchart TB
   together the store, WAL, reader, snapshot, and SSTables. Freezes the memtable
   and flushes it to an SSTable when its byte footprint crosses
   `flushThresholdBytes`; on startup catalogs `SSTable-<5 digits>` files (newest
-  first) and quarantines corrupted ones.
+  first) and quarantines corrupted ones. `Scan` merges the memtable, frozen
+  stores, and tables into one sorted, newest-first, first-seen-wins view over
+  an inclusive `[startKey, endKey]` range (see Data Flow).
 - **WARecord** — single frame codec shared by the WAL, snapshots, and SSTables:
   `[CRC:4][op:1][7-bit key][vlen:4+value, PUT only]`. A delete is a frame with no
   value payload; `ReadFromBytes` yields `value = null` for DELETEs.
@@ -109,6 +111,12 @@ flowchart TB
   → on-disk tables (newest first). A tombstone hit is terminal: it reports
   `KeyNotFound` (engine normalizes `KeyDeleted`) and does **not** fall through
   to older sources, so a delete always shadows older data.
+- **scan(startKey, endKey):** fold newest-first sources (memtable → frozen →
+  tables) into a `SkipList` with insert-if-absent semantics, so on a key
+  collision the **newest** source wins and a tombstone inserts as `null`,
+  occupying its slot; then filter nulls and return the `SkipList` — already
+  sorted by key, inclusive `[startKey, endKey]`, tombstones never resurrect
+  older data, and no re-sort is needed.
 - **flush:** when the store's byte footprint exceeds the threshold, freeze the
   current store (`MakeImmutable`), swap in a fresh one, then write the frozen
   store to `SSTable-<SerialNumber:D5>` (highest existing + 1) and register the
@@ -211,25 +219,32 @@ A single sorted, immutable table written to `SSTable-<SerialNumber:D5>`
   bloom filter; find the greatest index offset `≤ key`; open the file and scan
   records forward from that offset until the key is found or passed. A DELETE
   frame returns `KeyDeleted` (the engine normalizes it to `KeyNotFound`).
+- Scan mirrors lookup: seek the sparse index at the greatest offset `≤
+  startKey` (clamped to skip the 4-byte header), then read frames forward,
+  dropping records `< startKey`, until `endKey` is passed (inclusive) or the
+  read position passes the index area. Tombstones surface as DELETE frames and
+  the engine filters them after the merge.
 - The leftmost table in the catalog set is written first as `SSTable-TMP`
   then atomically `File.Move`d to its final name, so a crash mid-write leaves
   no partial `SSTable-#####`.
 
 ## Error Handling
 
-All components return a `kv_store.Enums.ErrorCode` instead of throwing for
-expected conditions. A `[Description]` on each enum value supplies a
-human-readable message via `ErrorCode.GetDescription()`.
+All components return a `kv_store.EnumsAndConstants.ErrorCode` instead of
+throwing for expected conditions. A `[Description]` on each enum value
+supplies a human-readable message via `ErrorCode.GetDescription()`.
 
-Distinct codes: `KeyNotValid` / `ValueNotValid` (bad input), `KeyNotFound`
-(get miss), `KeyDeleted` (terminal tombstone read at the store level; the
-engine normalizes it to `KeyNotFound` and stops searching), `EntryIsEmpty`,
-`FileIsEmpty` (empty log/snapshot), `CorruptedEntry` (bad/truncated WAL,
-snapshot, or table), `FileCorruptedOrUnsupportedVersion` (failed startup magic
-check), `ErrorInSSTablesLoading` (aggregate: at least one table failed to
-load), `WriteToImmutableInstance` (write to frozen store),
-`IOError`/`AccessDenied` (file system), `InvalidPath`, `UnInitializedInstance`
-(used before `Init`), `UnexpectedError` (catch-all).
+Distinct codes: `KeyIsInvalid` / `ValueIsInvalid` / `ArgumentsAreInvalid`
+(bad input), `KeyWasNotFound` (get miss), `KeyWasDeleted` (terminal tombstone
+read at the store level; the engine normalizes it to `KeyWasNotFound` and
+stops searching), `EntryIsEmpty`, `FileIsEmpty` (empty log/snapshot),
+`EntryIsCorrupted` (bad/truncated WAL, snapshot, or table),
+`FileIsCorruptedOrVersionUnsupported` (failed startup magic check),
+`SstablesFailedToLoad` (aggregate: at least one table failed to load),
+`CannotWriteToImmutableInstance` (write to frozen store),
+`InputOutputFailed` / `AccessDenied` / `PathIsInvalid` (file system),
+`InstanceIsNotInitialized` (used before `Init`), `OperationIsInvalid`,
+`HashingFailedUnexpectedly`, `UnexpectedFailure` (catch-all).
 
 ### Table-load policy
 
@@ -266,6 +281,11 @@ no partial-recovery or record-skipping strategy.
   flush time and cataloged `OrderDescending` by name at startup; reads walk
   memory → frozen → tables and return the first hit, so the most recent write
   (or tombstone) always wins.
+- **Range scan as newest-first merge.** Point reads and range reads share one
+  ordering rule. Each source returns its raw sorted snapshot (tombstones
+  included); the engine folds them with insert-if-absent so the newest write or
+  tombstone wins, then drops tombstone slots. Result is already sorted — no
+  re-sort, one pass, and scan behaves identically to `get` on every key.
 - **Tombstones via null value / DELETE frame.** A delete writes a null into the
   memtable (and a DELETE WAL frame). All three on-disk formats encode it the
   same way; reads surface it as terminal `KeyDeleted`, normalized to
@@ -300,7 +320,8 @@ framework beyond the runner). Coverage:
 6. `SparseIndexTests` — add, write/read round-trip, truncated stream.
 7. `SSTableTests` — write→read round-trip, sparse offsets point at record
    starts, tombstone DELETE-frames read back `KeyDeleted`, empty/`EntryIsEmpty`,
-   bad header/tail magic, truncated file.
+   bad header/tail magic, truncated file, and range scans (inclusive bounds,
+   seek within a sparse page, tombstone passthrough).
 8. `KeyValueStoreTests` — put/get/delete, idempotent delete, tombstone reads
    (`KeyDeleted`), memory-storage accounting incl. tombstones.
 9. `WAEngineTests` — put/get/delete, replay, snapshot save/load + WAL
@@ -308,7 +329,12 @@ framework beyond the runner). Coverage:
    flushed key honored), non-stride key lookup through a flushed table,
    corrupt-table quarantine and `*.corrupt` rename, abort on non-quarantinable
    corruption, good+bad table mix, uninitialized ops, auto-flush persist across
-   restart.
+   restart, and range-scan merges (newest table wins, tombstone shadows older
+   tables, inclusive bounds, empty result).
+10. `ProgramTests` — the REPL parse tree driven with zero I/O via
+    `Program.BuildRootCommand(new ReplContext())`: `scan` enforces both
+    arguments, start/end bind to the right descriptors, and put/get/scan
+    actions report through the context's message fields against a real engine.
 
 Run with:
 
