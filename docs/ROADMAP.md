@@ -8,7 +8,6 @@ acknowledged; full crash recovery via replay.
 ## M2 — LSM-tree (in progress)
 
 - Skip list memtable (done)
-- Generic Reader/Writer/Engine (deferred)
 - SSTable flush + bloom filter + sparse index (in progress)
 - Compaction
 - Range queries
@@ -70,3 +69,9 @@ portfolio review — concurrency bugs are the hardest class yet.
   the LSM/SSTable work actually bought.
 - Final design doc update covering the full architecture — the artifact a
   reviewer actually reads.
+
+## M8 — Bonus: Generic engine
+
+Make the engine and its storage components generic/reusable (Generic
+Reader/Writer/Engine). Deferred from M2; moved here to keep the core LSM
+implementation focused while preserving the goal for future work.
