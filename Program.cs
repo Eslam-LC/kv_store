@@ -11,99 +11,18 @@ namespace kv_store
         static void Main(string[] args)
         {
             ErrorCode errorCode;
+            var ctx = new ReplContext();
+            var rootCommand = BuildRootCommand(ctx);
 
-            var dataDirOption = new Option<DirectoryInfo>("--data-dir", "-d")
-            {
-                Description = "specifies directory for wal.log and snapshot.dat.",
-                DefaultValueFactory = parseResult => new DirectoryInfo("./data"),
-            };
-
-            var hexOption = new Option<bool>("--hex", "-x")
-            {
-                Description = "use to enter raw hex values.",
-                DefaultValueFactory = parseResult => false,
-            };
-
-            var keyArgument = new Argument<string>("key") { Description = "the key of the entry" };
-            var valueArgument = new Argument<string[]>("value") { Description = "value to insert" };
-            var startKeyArgument = new Argument<string>("startKey")
-            {
-                Description = "the start key (inclusive)",
-            };
-            var endKeyArgument = new Argument<string>("endKey")
-            {
-                Description = "the end key (inclusive)",
-            };
-
-            var pathArgument = new Argument<string?>("path")
-            {
-                Description = "snapshot file's path",
-                Arity = ArgumentArity.ZeroOrOne,
-            };
-
-            var putCommand = new Command("put", "inserts a key value pair into store.")
-            {
-                Arguments = { keyArgument, valueArgument },
-                Options = { hexOption },
-            };
-            var getCommand = new Command("get", "view the value as utf8 string.")
-            {
-                Arguments = { keyArgument },
-                Options = { hexOption },
-            };
-            var deleteCommand = new Command("delete", "deletes a key along with it's value.")
-            {
-                Arguments = { keyArgument },
-            };
-            var snapshotSaveCommand = new Command("save", "save a snapshot")
-            {
-                Arguments = { pathArgument },
-            };
-            var snapshotLoadCommand = new Command("load", "load a snapshot")
-            {
-                Arguments = { pathArgument },
-            };
-            var snapshotCommand = new Command("snapshot", "save/load a snapshot.")
-            {
-                Subcommands = { snapshotSaveCommand, snapshotLoadCommand },
-            };
-            var replayCommand = new Command(
-                "replay",
-                "appends entries in the write ahead log file"
-            );
-            var scanCommand = new Command("scan", "gets all entries between two keys")
-            {
-                Arguments = { startKeyArgument, endKeyArgument },
-                Options = { hexOption },
-            };
-            var exitCommand = new Command("exit", "closes the program.");
-
-            var rootCommand = new RootCommand("A write ahead logger with snapshot feature.")
-            {
-                Subcommands =
-                {
-                    putCommand,
-                    getCommand,
-                    deleteCommand,
-                    snapshotCommand,
-                    replayCommand,
-                    exitCommand,
-                },
-                Options = { dataDirOption },
-            };
-
-            DirectoryInfo? dir = rootCommand.Parse(args).GetValue(dataDirOption);
+            var dir = rootCommand.Parse(args).GetValue(ctx.DataDirOption!);
 
             dir ??= new(@"./data");
-
-            string? ErrorMessage = null,
-                SuccessMessage = null;
 
             if (!dir.Exists)
                 dir.Create();
 
-            var Engine = new WAEngine(dir.FullName); // later on the configs may include file names.
-            errorCode = Engine.Init(out var errors);
+            ctx.Engine = new WAEngine(dir.FullName); // later on the configs may include file names.
+            errorCode = ctx.Engine.Init(out var errors);
             if (errorCode != None)
             {
                 if (errorCode == SstablesFailedToLoad)
@@ -119,192 +38,19 @@ namespace kv_store
                 }
             }
 
-            putCommand.SetAction(parseResult =>
-            {
-                var key = parseResult.GetValue(keyArgument);
-                var value = parseResult.GetValue(valueArgument);
-                var hex = parseResult.GetValue(hexOption);
-
-                if (string.IsNullOrWhiteSpace(key) || value == null)
-                {
-                    ErrorMessage = $"Error: Invalid key or value entered.";
-                    return;
-                }
-
-                byte[][] ABytes = new byte[value.Length][];
-
-                for (int i = 0; i < value.Length; i++)
-                {
-                    string str = value[i];
-                    if (hex)
-                    {
-                        var errorCode = ConvertHexStringToBytes(str[2..], out ABytes[i]);
-                        if (errorCode != None || ABytes[i] == null)
-                        {
-                            ErrorMessage = $"Error: {errorCode}";
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        var TotalLength = Encoding.UTF8.GetByteCount(str);
-                        ABytes[i] = new byte[TotalLength];
-                        var _ = Encoding.UTF8.GetBytes(str, 0, str.Length, ABytes[i], 0);
-                    }
-                }
-
-                byte[] bytes = [.. ABytes.SelectMany(s => s)];
-
-                var errCode = Engine.Put(key, [.. bytes]);
-                if (errCode != None)
-                {
-                    ErrorMessage = $"Error: {errCode}.";
-                    return;
-                }
-                SuccessMessage = $"key: {key} was inserted.";
-            });
-
-            getCommand.SetAction(parseResult =>
-            {
-                var key = parseResult.GetValue(keyArgument);
-                var hex = parseResult.GetValue(hexOption);
-
-                if (key == null)
-                {
-                    ErrorMessage = $"Error: {KeyIsInvalid}.";
-                    return;
-                }
-                var errCode = Engine.TryGet(key, out var value);
-                if (errCode != None)
-                {
-                    ErrorMessage = $"Error: {errCode}.";
-                    return;
-                }
-                SuccessMessage =
-                    $"Retrieved '{key}' ({(hex ? PrintByteArray(value!) : PrintByteArrayAsString(value!))?.Length ?? 0} chars).";
-            });
-
-            deleteCommand.SetAction(parseResult =>
-            {
-                var key = parseResult.GetValue(keyArgument);
-
-                if (key == null)
-                {
-                    ErrorMessage = $"Error: {KeyIsInvalid}.";
-                    return;
-                }
-                var errCode = Engine.Delete(key);
-                if (errCode != None)
-                {
-                    ErrorMessage = $"Error: {errCode}.";
-                    return;
-                }
-                SuccessMessage = $"key: {key} was deleted.";
-            });
-
-            snapshotSaveCommand.SetAction(parseResult =>
-            {
-                ErrorCode errCode;
-                var path = parseResult.GetValue(pathArgument);
-                if (!string.IsNullOrWhiteSpace(path))
-                    Engine.SnapshotFile = path;
-
-                errCode = Engine.SaveSnapshot();
-
-                if (errCode != None)
-                {
-                    ErrorMessage = $"Error: {errCode}.";
-                    return;
-                }
-                SuccessMessage = $"snapshot saved.";
-            });
-
-            snapshotLoadCommand.SetAction(parseResult =>
-            {
-                ErrorCode errCode;
-                var path = parseResult.GetValue(pathArgument);
-                if (!string.IsNullOrWhiteSpace(path))
-                    Engine.SnapshotFile = path;
-
-                errCode = Engine.LoadSnapshot();
-
-                if (errCode != None)
-                {
-                    ErrorMessage = $"Error: {errCode}.";
-                    return;
-                }
-                Console.Write($"do you want to append WAL operations? (y/n)");
-                var key = Console.ReadKey();
-                Console.WriteLine();
-                if (key.KeyChar == 'y' || key.Key == ConsoleKey.Enter)
-                {
-                    errCode = Engine.ReplayRecords();
-                    if (errCode != None)
-                    {
-                        Console.WriteLine($"Error: {errCode}");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"WAL appended from: {Engine.WALFile}.");
-                    }
-                }
-                SuccessMessage = $"snapshot loaded.";
-            });
-
-            replayCommand.SetAction(parseResult =>
-            {
-                errorCode = Engine.ReplayRecords();
-                if (errorCode != None)
-                {
-                    ErrorMessage = $"Error: {errorCode}.";
-                    return;
-                }
-                SuccessMessage = $"WAL restored.";
-            });
-
-            scanCommand.SetAction(parseResult =>
-            {
-                var startKey = parseResult.GetValue(startKeyArgument);
-                var endKey = parseResult.GetValue(endKeyArgument);
-                var hex = parseResult.GetValue(hexOption);
-                if (string.IsNullOrWhiteSpace(startKey) || string.IsNullOrWhiteSpace(endKey))
-                {
-                    ErrorMessage = $"Error: {KeyIsInvalid}.";
-                    return;
-                }
-                errorCode = Engine.Scan(startKey, endKey, out var results);
-                if (errorCode != None)
-                {
-                    ErrorMessage = $"Error: {errorCode}.";
-                    return;
-                }
-                var resultsArray = results.ToArray();
-                if (hex)
-                    BrettyPrintHex(resultsArray);
-                else
-                    BrettyPrintRaw(resultsArray);
-                SuccessMessage =
-                    $"Scanned '{startKey}'..'{endKey}': {resultsArray.Length} pair(s).";
-            });
-
-            exitCommand.SetAction(parseResult =>
-            {
-                ExecuteExitRoutine();
-            });
-
             while (true)
             {
                 Console.Write($"> ");
-                if (!string.IsNullOrWhiteSpace(ErrorMessage))
+                if (!string.IsNullOrWhiteSpace(ctx.ErrorMessage))
                 {
-                    Console.Write($"{ErrorMessage}\n");
-                    ErrorMessage = null;
+                    Console.Write($"{ctx.ErrorMessage}\n");
+                    ctx.ErrorMessage = null;
                     continue;
                 }
-                if (!string.IsNullOrWhiteSpace(SuccessMessage))
+                if (!string.IsNullOrWhiteSpace(ctx.SuccessMessage))
                 {
-                    Console.Write($"{SuccessMessage}\n");
-                    SuccessMessage = null;
+                    Console.Write($"{ctx.SuccessMessage}\n");
+                    ctx.SuccessMessage = null;
                     continue;
                 }
 
@@ -420,6 +166,281 @@ namespace kv_store
             bytes = tempbytes;
 
             return None;
+        }
+
+        public class ReplContext
+        {
+            public WAEngine Engine = null!;
+            public Option<DirectoryInfo> DataDirOption = null!;
+            public Argument<string> StartKeyArgument = null!;
+            public Argument<string> EndKeyArgument = null!;
+            public string? ErrorMessage;
+            public string? SuccessMessage;
+        }
+
+        public static RootCommand BuildRootCommand(ReplContext ctx)
+        {
+            ErrorCode errorCode;
+
+            var dataDirOption = new Option<DirectoryInfo>("--data-dir", "-d")
+            {
+                Description = "specifies directory for wal.log and snapshot.dat.",
+                DefaultValueFactory = parseResult => new DirectoryInfo("./data"),
+            };
+
+            ctx.DataDirOption = dataDirOption;
+
+            var hexOption = new Option<bool>("--hex", "-x")
+            {
+                Description = "use to enter raw hex values.",
+                DefaultValueFactory = parseResult => false,
+            };
+
+            var keyArgument = new Argument<string>("key") { Description = "the key of the entry" };
+            var valueArgument = new Argument<string[]>("value") { Description = "value to insert" };
+            var startKeyArgument = new Argument<string>("startKey")
+            {
+                Description = "the start key (inclusive)",
+            };
+            var endKeyArgument = new Argument<string>("endKey")
+            {
+                Description = "the end key (inclusive)",
+            };
+
+            ctx.StartKeyArgument = startKeyArgument;
+            ctx.EndKeyArgument = endKeyArgument;
+
+            var pathArgument = new Argument<string?>("path")
+            {
+                Description = "snapshot file's path",
+                Arity = ArgumentArity.ZeroOrOne,
+            };
+
+            var putCommand = new Command("put", "inserts a key value pair into store.")
+            {
+                Arguments = { keyArgument, valueArgument },
+                Options = { hexOption },
+            };
+            var getCommand = new Command("get", "view the value as utf8 string.")
+            {
+                Arguments = { keyArgument },
+                Options = { hexOption },
+            };
+            var deleteCommand = new Command("delete", "deletes a key along with it's value.")
+            {
+                Arguments = { keyArgument },
+            };
+            var snapshotSaveCommand = new Command("save", "save a snapshot")
+            {
+                Arguments = { pathArgument },
+            };
+            var snapshotLoadCommand = new Command("load", "load a snapshot")
+            {
+                Arguments = { pathArgument },
+            };
+            var snapshotCommand = new Command("snapshot", "save/load a snapshot.")
+            {
+                Subcommands = { snapshotSaveCommand, snapshotLoadCommand },
+            };
+            var replayCommand = new Command(
+                "replay",
+                "appends entries in the write ahead log file"
+            );
+            var scanCommand = new Command("scan", "gets all entries between two keys")
+            {
+                Arguments = { startKeyArgument, endKeyArgument },
+                Options = { hexOption },
+            };
+            var exitCommand = new Command("exit", "closes the program.");
+
+            var rootCommand = new RootCommand("A write ahead logger with snapshot feature.")
+            {
+                Subcommands =
+                {
+                    putCommand,
+                    getCommand,
+                    scanCommand,
+                    deleteCommand,
+                    snapshotCommand,
+                    replayCommand,
+                    exitCommand,
+                },
+                Options = { dataDirOption },
+            };
+
+            putCommand.SetAction(parseResult =>
+            {
+                var key = parseResult.GetValue(keyArgument);
+                var value = parseResult.GetValue(valueArgument);
+                var hex = parseResult.GetValue(hexOption);
+
+                if (string.IsNullOrWhiteSpace(key) || value == null)
+                {
+                    ctx.ErrorMessage = $"Error: Invalid key or value entered.";
+                    return;
+                }
+
+                byte[][] ABytes = new byte[value.Length][];
+
+                for (int i = 0; i < value.Length; i++)
+                {
+                    string str = value[i];
+                    if (hex)
+                    {
+                        var errorCode = ConvertHexStringToBytes(str[2..], out ABytes[i]);
+                        if (errorCode != None || ABytes[i] == null)
+                        {
+                            ctx.ErrorMessage = $"Error: {errorCode}";
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        var TotalLength = Encoding.UTF8.GetByteCount(str);
+                        ABytes[i] = new byte[TotalLength];
+                        var _ = Encoding.UTF8.GetBytes(str, 0, str.Length, ABytes[i], 0);
+                    }
+                }
+
+                byte[] bytes = [.. ABytes.SelectMany(s => s)];
+
+                var errCode = ctx.Engine.Put(key, [.. bytes]);
+                if (errCode != None)
+                {
+                    ctx.ErrorMessage = $"Error: {errCode}.";
+                    return;
+                }
+                ctx.SuccessMessage = $"key: {key} was inserted.";
+            });
+
+            getCommand.SetAction(parseResult =>
+            {
+                var key = parseResult.GetValue(keyArgument);
+                var hex = parseResult.GetValue(hexOption);
+
+                if (key == null)
+                {
+                    ctx.ErrorMessage = $"Error: {KeyIsInvalid}.";
+                    return;
+                }
+                var errCode = ctx.Engine.TryGet(key, out var value);
+                if (errCode != None)
+                {
+                    ctx.ErrorMessage = $"Error: {errCode}.";
+                    return;
+                }
+                ctx.SuccessMessage =
+                    $"Retrieved '{key}' ({(hex ? PrintByteArray(value!) : PrintByteArrayAsString(value!))?.Length ?? 0} chars).";
+            });
+
+            deleteCommand.SetAction(parseResult =>
+            {
+                var key = parseResult.GetValue(keyArgument);
+
+                if (key == null)
+                {
+                    ctx.ErrorMessage = $"Error: {KeyIsInvalid}.";
+                    return;
+                }
+                var errCode = ctx.Engine.Delete(key);
+                if (errCode != None)
+                {
+                    ctx.ErrorMessage = $"Error: {errCode}.";
+                    return;
+                }
+                ctx.SuccessMessage = $"key: {key} was deleted.";
+            });
+
+            snapshotSaveCommand.SetAction(parseResult =>
+            {
+                ErrorCode errCode;
+                var path = parseResult.GetValue(pathArgument);
+                if (!string.IsNullOrWhiteSpace(path))
+                    ctx.Engine.SnapshotFile = path;
+
+                errCode = ctx.Engine.SaveSnapshot();
+
+                if (errCode != None)
+                {
+                    ctx.ErrorMessage = $"Error: {errCode}.";
+                    return;
+                }
+                ctx.SuccessMessage = $"snapshot saved.";
+            });
+
+            snapshotLoadCommand.SetAction(parseResult =>
+            {
+                ErrorCode errCode;
+                var path = parseResult.GetValue(pathArgument);
+                if (!string.IsNullOrWhiteSpace(path))
+                    ctx.Engine.SnapshotFile = path;
+
+                errCode = ctx.Engine.LoadSnapshot();
+
+                if (errCode != None)
+                {
+                    ctx.ErrorMessage = $"Error: {errCode}.";
+                    return;
+                }
+                Console.Write($"do you want to append WAL operations? (y/n)");
+                var key = Console.ReadKey();
+                Console.WriteLine();
+                if (key.KeyChar == 'y' || key.Key == ConsoleKey.Enter)
+                {
+                    errCode = ctx.Engine.ReplayRecords();
+                    if (errCode != None)
+                    {
+                        Console.WriteLine($"Error: {errCode}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"WAL appended from: {ctx.Engine.WALFile}.");
+                    }
+                }
+                ctx.SuccessMessage = $"snapshot loaded.";
+            });
+
+            replayCommand.SetAction(parseResult =>
+            {
+                errorCode = ctx.Engine.ReplayRecords();
+                if (errorCode != None)
+                {
+                    ctx.ErrorMessage = $"Error: {errorCode}.";
+                    return;
+                }
+                ctx.SuccessMessage = $"WAL restored.";
+            });
+
+            scanCommand.SetAction(parseResult =>
+            {
+                var startKey = parseResult.GetValue(startKeyArgument);
+                var endKey = parseResult.GetValue(endKeyArgument);
+                var hex = parseResult.GetValue(hexOption);
+                if (string.IsNullOrWhiteSpace(startKey) || string.IsNullOrWhiteSpace(endKey))
+                {
+                    ctx.ErrorMessage = $"Error: {KeyIsInvalid}.";
+                    return;
+                }
+                errorCode = ctx.Engine.Scan(startKey, endKey, out var results);
+                if (errorCode != None)
+                {
+                    ctx.ErrorMessage = $"Error: {errorCode}.";
+                    return;
+                }
+                var resultsArray = results.ToArray();
+                if (hex)
+                    BrettyPrintHex(resultsArray);
+                else
+                    BrettyPrintRaw(resultsArray);
+                ctx.SuccessMessage =
+                    $"Scanned '{startKey}'..'{endKey}': {resultsArray.Length} pair(s).";
+            });
+
+            exitCommand.SetAction(parseResult =>
+            {
+                ExecuteExitRoutine();
+            });
+            return rootCommand;
         }
     }
 }
