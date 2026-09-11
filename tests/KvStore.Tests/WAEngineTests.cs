@@ -340,6 +340,165 @@ public class WAEngineTests : IDisposable
         Assert.Equal(big, vBig);
     }
 
+    static List<KeyValuePair<string, byte[]>> Scan(
+        WAEngine engine,
+        string startKey,
+        string endKey
+    )
+    {
+        Assert.Equal(ErrorCode.None, engine.Scan(startKey, endKey, out var results));
+        return results;
+    }
+
+    [Fact]
+    public void Scan_EmptyStore_ReturnsEmpty()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+        Assert.Empty(Scan(engine, "a", "z"));
+    }
+
+    [Fact]
+    public void Scan_MemstoreEntries_ReturnsSortedInRange()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+        Assert.Equal(ErrorCode.None, engine.Put("a", [1]));
+        Assert.Equal(ErrorCode.None, engine.Put("b", [2]));
+        Assert.Equal(ErrorCode.None, engine.Put("c", [3]));
+        Assert.Equal(ErrorCode.None, engine.Put("d", [4]));
+
+        var results = Scan(engine, "b", "c");
+        Assert.Equal(2, results.Count);
+        Assert.Equal("b", results[0].Key);
+        Assert.Equal([2], results[0].Value);
+        Assert.Equal("c", results[1].Key);
+        Assert.Equal([3], results[1].Value);
+    }
+
+    [Fact]
+    public void Scan_InclusiveRangeBoundaries()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+        Assert.Equal(ErrorCode.None, engine.Put("m", [1]));
+
+        var results = Scan(engine, "m", "m");
+        Assert.Equal([new KeyValuePair<string, byte[]>("m", [1])], results);
+    }
+
+    [Fact]
+    public void Scan_ExcludesTombstones()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+        Assert.Equal(ErrorCode.None, engine.Put("a", [1]));
+        Assert.Equal(ErrorCode.None, engine.Put("b", [2]));
+        Assert.Equal(ErrorCode.None, engine.Delete("b"));
+
+        var results = Scan(engine, "a", "z");
+        var entry = Assert.Single(results);
+        Assert.Equal("a", entry.Key);
+    }
+
+    [Fact]
+    public void Scan_NewestValueWins()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+        Assert.Equal(ErrorCode.None, engine.Put("k", [1]));
+        Assert.Equal(ErrorCode.None, engine.Put("k", [2, 3]));
+
+        var results = Scan(engine, "a", "z");
+        var entry = Assert.Single(results);
+        Assert.Equal("k", entry.Key);
+        Assert.Equal([2, 3], entry.Value);
+    }
+
+    [Fact]
+    public void Scan_StartGreaterThanEnd_ReturnsEmpty()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+        Assert.Equal(ErrorCode.None, engine.Put("a", [1]));
+
+        Assert.Empty(Scan(engine, "z", "a"));
+    }
+
+    [Fact]
+    public void Scan_AfterFlush_IncludesSSTableEntries()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+
+        Assert.Equal(ErrorCode.None, engine.Put("a", [1]));
+        Assert.Equal(ErrorCode.None, engine.Put("b", [2]));
+
+        var big = new byte[40_000];
+        Random.Shared.NextBytes(big);
+        Assert.Equal(ErrorCode.None, engine.Put("zz", big)); // flush
+
+        var results = Scan(engine, "a", "z");
+        Assert.Equal(2, results.Count);
+        Assert.Equal("a", results[0].Key);
+        Assert.Equal("b", results[1].Key);
+    }
+
+    [Fact]
+    public void Scan_IncludesSSTableEntries_NewestTableWins()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+
+        Assert.Equal(ErrorCode.None, engine.Put("a", [1]));
+        var big1 = new byte[40_000];
+        Random.Shared.NextBytes(big1);
+        Assert.Equal(ErrorCode.None, engine.Put("zz", big1)); // flush table 1
+
+        Assert.Equal(ErrorCode.None, engine.Put("a", [2]));
+        Assert.Equal(ErrorCode.None, engine.Put("b", [3]));
+        var big2 = new byte[40_000];
+        Random.Shared.NextBytes(big2);
+        Assert.Equal(ErrorCode.None, engine.Put("yy", big2)); // flush table 2
+
+        var results = Scan(engine, "a", "z");
+        Assert.Equal(3, results.Count);
+        Assert.Equal("a", results[0].Key);
+        Assert.Equal([2], results[0].Value); // newest table wins
+        Assert.Equal("b", results[1].Key);
+        Assert.Equal("zz", results[2].Key);
+    }
+
+    [Fact]
+    public void Scan_TombstoneShadowsFlushedKey()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+
+        Assert.Equal(ErrorCode.None, engine.Put("a", [1]));
+        var big = new byte[40_000];
+        Random.Shared.NextBytes(big);
+        Assert.Equal(ErrorCode.None, engine.Put("zz", big)); // "a" flushed
+
+        Assert.Equal(ErrorCode.None, engine.Delete("a")); // tombstone shadows flushed "a"
+        Assert.Equal(ErrorCode.None, engine.Put("b", [2]));
+
+        // "a" flushed then deleted -> excluded; "b" in memstore -> included; "zz" out of range
+        var results = Scan(engine, "a", "z");
+        var entry = Assert.Single(results);
+        Assert.Equal("b", entry.Key);
+    }
+
+    [Fact]
+    public void Scan_Uninitialized_ReturnsInstanceNotInitialized()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(
+            ErrorCode.InstanceIsNotInitialized,
+            engine.Scan("a", "z", out _)
+        );
+    }
+
     [Fact]
     public void Uninitialized_Ops_ReturnUnInitialized()
     {

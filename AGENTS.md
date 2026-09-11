@@ -17,6 +17,7 @@ LSM-style key/value store. C# / .NET 10 console app (System.CommandLine REPL) wi
 - **Update `AGENTS.md` after major changes.** When a task significantly changes architecture, commands, on-disk formats, or workflow (not cosmetic edits), remind the user to update `AGENTS.md` (and `README.md`/`docs/DESIGN.md` if affected) so future sessions get accurate project state.
 - **Diff-first debugging.** Before diagnosing, run `git log --oneline -5` and `git diff` on the file in question — most bugs here were introduced by the last uncommitted refactor, not ancient code.
 - **Split-brain editing (critical):** assistant edits tests (`tests/KvStore.Tests/`) directly. Product code (`Program.cs`, `Implementations/`, `Enums/`) is only ever *proposed* — the user applies those edits.
+- **Explain before code (critical):** for product changes, never dump code first. State in natural language what must change, why, and the design decisions (semantics, edge cases, ordering), then wait for the user to ask for code. The user implements by hand to learn how requirements shape code. Tests are exempt — assistant may write those directly.
 - Any transient product-code instrumentation must be announced (file:line), run, then reverted before the task ends.
 
 ## Architecture notes
