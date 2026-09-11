@@ -126,3 +126,4 @@ available to re-apply the log on demand.
 ## Documentation
 
 - [Design Document](docs/DESIGN.md) — architecture, on-disk formats, and design trade-offs.
+- [Roadmap](docs/ROADMAP.md) — milestone plan and current progress.

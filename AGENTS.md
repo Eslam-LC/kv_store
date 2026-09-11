@@ -1,6 +1,6 @@
 # KV Store
 
-LSM-style key/value store. C# / .NET 10 console app (System.CommandLine REPL) with storage logic in `Implementations/`. See `README.md` (usage) and `docs/DESIGN.md` (architecture) — keep both in sync when on-disk formats change.
+LSM-style key/value store. C# / .NET 10 console app (System.CommandLine REPL) with storage logic in `Implementations/`. See `README.md` (usage), `docs/DESIGN.md` (architecture) — keep both in sync when on-disk formats change — and `docs/ROADMAP.md` (milestone plan). Current milestone: **M2 LSM-tree in progress** (SSTable flush + bloom + sparse index; compaction and range queries next).
 
 ## Commands
 
