@@ -1,8 +1,9 @@
 using System.Text;
-using kv_store.Enums;
-using static kv_store.Enums.ErrorCode;
-using static kv_store.Enums.MapExToEr;
-using static kv_store.Enums.WAOperation;
+using kv_store.EnumsAndConstants;
+using static kv_store.EnumsAndConstants.Constants;
+using static kv_store.EnumsAndConstants.ErrorCode;
+using static kv_store.EnumsAndConstants.MapExToEr;
+using static kv_store.EnumsAndConstants.WAOperation;
 
 namespace kv_store.Implementations
 {
@@ -239,6 +240,7 @@ namespace kv_store.Implementations
 
         private FileStream? stream;
         private BinaryReader? reader;
+        private readonly SSTable.FooterTag footerTag;
 
         public ImmutableSSTable(string fileName, SSTable.FooterTag footer)
         {
@@ -261,11 +263,12 @@ namespace kv_store.Implementations
                 throw new ArgumentException("Failed to read sparse index", nameof(footer));
             r.BaseStream.Seek(footer.FilterOffset, SeekOrigin.Begin);
             BloomFilter = new(r.ReadBytes(footer.FilterLength), footer.BitSize, footer.HashCount);
+            footerTag = footer;
         }
 
         public ImmutableSSTable(
             string fileName,
-            SSTable.FooterTag foooter,
+            SSTable.FooterTag footer,
             string firstKey,
             string lastKey,
             ImmutableSkipList<string, long> sparseIndex,
@@ -273,12 +276,13 @@ namespace kv_store.Implementations
         )
         {
             FileName = fileName;
-            MagicVersion = foooter.MagicVersion;
-            RecordCount = foooter.RecordCount;
+            MagicVersion = footer.MagicVersion;
+            RecordCount = footer.RecordCount;
             FirstKey = firstKey;
             LastKey = lastKey;
             SparseIndex = sparseIndex;
-            BloomFilter = new(filterBytes, foooter.BitSize, foooter.HashCount);
+            BloomFilter = new(filterBytes, footer.BitSize, footer.HashCount);
+            footerTag = footer;
         }
 
         public ErrorCode TryReadEntry(string key, out byte[]? value)
@@ -313,6 +317,7 @@ namespace kv_store.Implementations
                 errCode == None
                 && fetchedKey != null
                 && key.CompareTo(fetchedKey, StringComparison.Ordinal) > 0
+                && reader.BaseStream.Position < footerTag.IndexOffset
             )
             {
                 errCode = WARecord.ReadFrame(reader, out op, out fetchedKey, out value!);
@@ -327,6 +332,53 @@ namespace kv_store.Implementations
             if (op == DELETE)
                 return KeyWasDeleted;
 
+            return None;
+        }
+
+        public ErrorCode Scan(
+            string startKey,
+            string endKey,
+            out IEnumerable<KeyValuePair<string, byte[]?>> pairs
+        )
+        {
+            pairs = [];
+            if (
+                endKey.CompareTo(FirstKey, StringComparison.Ordinal) < 0
+                || startKey.CompareTo(LastKey, StringComparison.Ordinal) > 0
+            )
+                return None;
+
+            if (!SparseIndex.GetValueAtOrBefore(startKey, out long offset))
+                return UnexpectedFailure; // should be unreachable
+
+            if (reader == null)
+            {
+                stream = new(FileName, FileMode.Open, FileAccess.Read);
+                reader = new(stream);
+            }
+
+            List<KeyValuePair<string, byte[]?>> keyValues = [];
+
+            reader.BaseStream.Seek(offset, SeekOrigin.Begin);
+            ErrorCode errCode = WARecord.ReadFrame(
+                reader,
+                out var op,
+                out string? fetchedKey,
+                out var value
+            );
+
+            while (
+                errCode == None
+                && fetchedKey != null
+                && endKey.CompareTo(fetchedKey, StringComparison.Ordinal) > 0
+                && reader.BaseStream.Position < footerTag.IndexOffset
+            )
+            {
+                keyValues.Add(new(fetchedKey, op == DELETE ? Deleted : value));
+                errCode = WARecord.ReadFrame(reader, out op, out fetchedKey, out value!);
+            }
+
+            pairs = keyValues;
             return None;
         }
 

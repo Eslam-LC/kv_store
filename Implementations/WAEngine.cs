@@ -1,8 +1,9 @@
 using System.Text.RegularExpressions;
-using kv_store.Enums;
-using static kv_store.Enums.ErrorCode;
-using static kv_store.Enums.MapExToEr;
-using static kv_store.Enums.WAOperation;
+using kv_store.EnumsAndConstants;
+using static kv_store.EnumsAndConstants.Constants;
+using static kv_store.EnumsAndConstants.ErrorCode;
+using static kv_store.EnumsAndConstants.MapExToEr;
+using static kv_store.EnumsAndConstants.WAOperation;
 
 namespace kv_store.Implementations
 {
@@ -199,6 +200,57 @@ namespace kv_store.Implementations
             if (errorCode != None)
                 return errorCode;
 
+            return None;
+        }
+
+        public ErrorCode Scan(
+            string startKey,
+            string endKey,
+            out IEnumerable<KeyValuePair<string, byte[]?>> results
+        )
+        {
+            if (MemStore == null)
+            {
+                results = [];
+                return InstanceIsNotInitialized;
+            }
+            SkipList<string, byte[]?> keyValues = [];
+            ErrorCode errorCode = MemStore.Scan(startKey, endKey, out var pairs);
+            if (errorCode != None)
+            {
+                results = [];
+                return errorCode;
+            }
+            foreach (var item in pairs)
+            {
+                keyValues.AddWithoutUpdate(item.Key, item.Value);
+            }
+
+            for (int i = Frozen_.Count - 1; i >= 0; i--)
+            {
+                KeyValueStore l = Frozen_[i];
+                errorCode = l.Scan(startKey, endKey, out pairs);
+                if (errorCode != None)
+                {
+                    results = [];
+                    return errorCode;
+                }
+                foreach (var item in pairs)
+                {
+                    keyValues.AddWithoutUpdate(item.Key, item.Value);
+                }
+            }
+
+            foreach (var table in immutableSSTables)
+            {
+                errorCode = table.Scan(startKey, endKey, out pairs);
+                foreach (var item in pairs)
+                {
+                    keyValues.AddWithoutUpdate(item.Key, item.Value);
+                }
+            }
+
+            results = keyValues.Where(kv => kv.Value != Deleted);
             return None;
         }
 

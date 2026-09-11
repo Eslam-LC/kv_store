@@ -1,8 +1,8 @@
 using System.CommandLine;
 using System.Text;
-using kv_store.Enums;
+using kv_store.EnumsAndConstants;
 using kv_store.Implementations;
-using static kv_store.Enums.ErrorCode;
+using static kv_store.EnumsAndConstants.ErrorCode;
 
 namespace kv_store
 {

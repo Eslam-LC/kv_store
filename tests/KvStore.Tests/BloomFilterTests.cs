@@ -1,5 +1,5 @@
 using System.Text;
-using kv_store.Enums;
+using kv_store.EnumsAndConstants;
 using kv_store.Implementations;
 using Xunit;
 

@@ -1,4 +1,4 @@
-using kv_store.Enums;
+using kv_store.EnumsAndConstants;
 using kv_store.Implementations;
 using Xunit;
 
@@ -340,14 +340,10 @@ public class WAEngineTests : IDisposable
         Assert.Equal(big, vBig);
     }
 
-    static List<KeyValuePair<string, byte[]>> Scan(
-        WAEngine engine,
-        string startKey,
-        string endKey
-    )
+    static List<KeyValuePair<string, byte[]?>> Scan(WAEngine engine, string startKey, string endKey)
     {
         Assert.Equal(ErrorCode.None, engine.Scan(startKey, endKey, out var results));
-        return results;
+        return [.. results];
     }
 
     [Fact]
@@ -384,7 +380,7 @@ public class WAEngineTests : IDisposable
         Assert.Equal(ErrorCode.None, engine.Put("m", [1]));
 
         var results = Scan(engine, "m", "m");
-        Assert.Equal([new KeyValuePair<string, byte[]>("m", [1])], results);
+        Assert.Equal([new KeyValuePair<string, byte[]?>("m", [1])], results);
     }
 
     [Fact]
@@ -493,10 +489,7 @@ public class WAEngineTests : IDisposable
     public void Scan_Uninitialized_ReturnsInstanceNotInitialized()
     {
         var engine = new WAEngine(tempDir);
-        Assert.Equal(
-            ErrorCode.InstanceIsNotInitialized,
-            engine.Scan("a", "z", out _)
-        );
+        Assert.Equal(ErrorCode.InstanceIsNotInitialized, engine.Scan("a", "z", out _));
     }
 
     [Fact]

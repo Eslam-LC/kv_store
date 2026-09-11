@@ -1,4 +1,4 @@
-namespace kv_store.Enums
+namespace kv_store.EnumsAndConstants
 {
     public enum WAOperation : byte
     {

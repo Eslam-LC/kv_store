@@ -1,6 +1,6 @@
-using kv_store.Enums;
-using static kv_store.Enums.ErrorCode;
-using static kv_store.Enums.MapExToEr;
+using kv_store.EnumsAndConstants;
+using static kv_store.EnumsAndConstants.ErrorCode;
+using static kv_store.EnumsAndConstants.MapExToEr;
 
 namespace kv_store.Implementations
 {

@@ -1,6 +1,6 @@
 using System.Text;
-using kv_store.Enums;
-using static kv_store.Enums.ErrorCode;
+using kv_store.EnumsAndConstants;
+using static kv_store.EnumsAndConstants.ErrorCode;
 using static kv_store.Implementations.HashHelper;
 
 namespace kv_store.Implementations

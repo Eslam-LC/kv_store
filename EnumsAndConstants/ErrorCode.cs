@@ -1,6 +1,6 @@
-using static kv_store.Enums.ErrorCode;
+using static kv_store.EnumsAndConstants.ErrorCode;
 
-namespace kv_store.Enums
+namespace kv_store.EnumsAndConstants
 {
     public enum ErrorCode
     {

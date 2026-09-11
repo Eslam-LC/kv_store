@@ -1,5 +1,5 @@
-using kv_store.Enums;
-using static kv_store.Enums.ErrorCode;
+using kv_store.EnumsAndConstants;
+using static kv_store.EnumsAndConstants.ErrorCode;
 
 namespace kv_store.Implementations
 {
@@ -9,6 +9,8 @@ namespace kv_store.Implementations
         long memoryStorage;
         public long MemoryStorage => memoryStorage;
         bool Mutable = true;
+
+        const byte[]? Deleted = null;
 
         public ErrorCode Put(string key, byte[] value)
         {
@@ -20,7 +22,7 @@ namespace kv_store.Implementations
                 return ValueIsInvalid;
 
             var found = KVList.TryGetValue(key, out var oldValue);
-            var deltaLength = oldValue == null ? value.Length : value.Length - oldValue.Length;
+            var deltaLength = oldValue == Deleted ? value.Length : value.Length - oldValue.Length;
             if (!found)
                 deltaLength += key.Length;
             memoryStorage += deltaLength;
@@ -59,7 +61,7 @@ namespace kv_store.Implementations
             var success = KVList.TryGetValue(key, out value);
 
             if (success)
-                return (value != null) ? None : KeyWasDeleted;
+                return (value != Deleted) ? None : KeyWasDeleted;
             else
                 return KeyWasNotFound;
         }
@@ -73,13 +75,29 @@ namespace kv_store.Implementations
 
             var found = KVList.TryGetValue(key, out var oldValue);
 
-            var deltaLength = oldValue == null ? 0 : -oldValue.Length;
+            var deltaLength = oldValue == Deleted ? 0 : -oldValue.Length;
             if (!found)
                 deltaLength += key.Length;
             memoryStorage += deltaLength;
 
-            KVList[key] = null;
+            KVList[key] = Deleted;
 
+            return None;
+        }
+
+        public ErrorCode Scan(
+            string startKey,
+            string endKey,
+            out IEnumerable<KeyValuePair<string, byte[]?>> results
+        )
+        {
+            if (string.IsNullOrWhiteSpace(startKey) || string.IsNullOrWhiteSpace(endKey))
+            {
+                results = [];
+                return KeyIsInvalid;
+            }
+
+            results = KVList.Scan(startKey, endKey);
             return None;
         }
 

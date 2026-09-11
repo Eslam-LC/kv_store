@@ -137,6 +137,29 @@ public class SkipList<TKey, TValue>(int MaxLevel = 20)
         set { var _ = Add(key, value!); }
     }
 
+    public bool AddWithoutUpdate(TKey key, TValue value)
+    {
+        if (key == null)
+            return false;
+        if (!TryGetNode(key, out _, out var update))
+        {
+            int level = 1;
+            while (Flip)
+                ++level;
+            level = level < MaxLevel ? level : MaxLevel;
+
+            QuadNode<TKey, TValue> newNode = new(key, value, level);
+            for (int i = 0; i < level; i++)
+            {
+                newNode.ForwardPointers[i] = update[i].ForwardPointers[i];
+                update[i].ForwardPointers[i] = newNode;
+            }
+            ++Count;
+            return true;
+        }
+        return false;
+    }
+
     bool FindFirstAtOrAfter(TKey key, out QuadNode<TKey, TValue>? outNode)
     {
         var current = _head;
