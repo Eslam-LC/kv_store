@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Diagnostics.CodeAnalysis;
 
 namespace kv_store.Implementations;
 
@@ -63,10 +64,10 @@ public class SkipList<TKey, TValue>(int MaxLevel = 20)
 
     public void Add(KeyValuePair<TKey, TValue> keyValue) => Add(keyValue.Key, keyValue.Value);
 
-    public bool TryGetValue(TKey key, out TValue? value)
+    public bool TryGetValue(TKey key, [MaybeNullWhen(false)] out TValue value)
     {
         var ret = TryGetNode(key, out var currentNode, out var _, false);
-        value = currentNode == null ? default : currentNode.Value;
+        value = currentNode == null ? default! : currentNode.Value!;
         return ret;
     }
 
@@ -88,19 +89,6 @@ public class SkipList<TKey, TValue>(int MaxLevel = 20)
     }
 
     public bool Remove(KeyValuePair<TKey, TValue> keyValue) => Remove(keyValue.Key);
-
-    public bool SetDefault(TKey key)
-    {
-        if (TryGetNode(key, out var currentNode, out var _, false))
-        {
-            if (currentNode == null)
-                return false;
-
-            currentNode.Value = default;
-            return true;
-        }
-        return false;
-    }
 
     public IEnumerator<KeyValuePair<TKey, TValue>> GetEnumerator()
     {
@@ -126,13 +114,13 @@ public class SkipList<TKey, TValue>(int MaxLevel = 20)
         return retList;
     }
 
-    public TValue? this[TKey key]
+    public TValue this[TKey key]
     {
         get
         {
             if (TryGetValue(key, out var value))
                 return value;
-            return default;
+            return default!;
         }
         set { var _ = Add(key, value!); }
     }
@@ -261,6 +249,12 @@ public class SkipList<TKey, TValue>(int MaxLevel = 20)
             array[i++] = item;
         }
     }
+
+    public bool ContainsKey(TKey key) => TryGetValue(key, out _);
+
+    public static implicit operator ImmutableSkipList<TKey, TValue>(
+        SkipList<TKey, TValue> keyValues
+    ) => new(keyValues);
 }
 
 public class ImmutableSkipList<TKey, TValue>(SkipList<TKey, TValue> pairs) : IEnumerable

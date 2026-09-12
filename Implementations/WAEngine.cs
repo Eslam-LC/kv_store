@@ -288,12 +288,15 @@ namespace kv_store.Implementations
         {
             if (MemStore == null)
                 return InstanceIsNotInitialized;
+
+            KeyValueStore store = new();
+
             try
             {
                 using FileStream stream = new(WALFile, FileMode.Open, FileAccess.Read);
                 using BinaryReader reader = new(stream);
 
-                var errorCode = WAReader.ReadRecords(reader, in MemStore);
+                var errorCode = WAReader.ReadRecords(reader, in store);
                 if (errorCode != None)
                     return errorCode;
             }
@@ -305,6 +308,8 @@ namespace kv_store.Implementations
             {
                 return PathIsInvalid;
             }
+
+            MemStore.BulkPut(store);
 
             return None;
         }

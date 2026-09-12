@@ -1,4 +1,5 @@
 using kv_store.EnumsAndConstants;
+using static kv_store.EnumsAndConstants.Constants;
 using static kv_store.EnumsAndConstants.ErrorCode;
 
 namespace kv_store.Implementations
@@ -9,8 +10,6 @@ namespace kv_store.Implementations
         long memoryStorage;
         public long MemoryStorage => memoryStorage;
         bool Mutable = true;
-
-        const byte[]? Deleted = null;
 
         public ErrorCode Put(string key, byte[] value)
         {
@@ -48,6 +47,40 @@ namespace kv_store.Implementations
                 return UnexpectedFailure;
             }
             return None;
+        }
+
+        public ErrorCode BulkPut(SkipList<string, byte[]?> keyValues)
+        {
+            if (!Mutable)
+                return CannotWriteToImmutableInstance;
+            if (keyValues == null)
+                return ArgumentsAreInvalid;
+
+            ErrorCode errorCode;
+
+            try
+            {
+                foreach (var (key, value) in keyValues)
+                {
+                    if (value == Deleted)
+                        errorCode = Delete(key);
+                    else
+                        errorCode = Put(key, value);
+
+                    if (errorCode != None)
+                        return errorCode;
+                }
+            }
+            catch
+            {
+                return UnexpectedFailure;
+            }
+            return None;
+        }
+
+        public ErrorCode BulkPut(KeyValueStore store)
+        {
+            return BulkPut(store.KVList);
         }
 
         public ErrorCode TryGet(string key, out byte[]? value)
