@@ -34,6 +34,11 @@ checkpoint mechanism.
 Single-threaded/single-process today. Real systems support concurrent reads
 during writes, and concurrent writers.
 
+- **Performance baseline harness (pulled ahead of M7).** A stopwatch-based
+  benchmark (`dotnet run -- --benchmark`) measuring put/delete/get/scan/flush —
+  captured as a `before.txt` now, rerun and diffed after every concurrency
+  change. Numbers gate the work; the single-threaded "before" is only
+  capturable before the engine gets restructured.
 - Reader-writer locking or lock-free structures for the memtable (skip lists
   are a common choice specifically because they support lock-free/fine-grained
   concurrent access better than balanced trees).
@@ -61,9 +66,10 @@ portfolio review — concurrency bugs are the hardest class yet.
 
 ## M7 — Benchmarking & write-up
 
-- Formal benchmark suite (throughput, p99 latency, read/write ratios) compared
-  against a baseline (SQLite, or the M1 dict-based version) to quantify what
-  the LSM/SSTable work actually bought.
+- **Formalize the M4 harness into the final suite:** percentile latencies
+  (p99), read/write mixes, multi-threaded scaling (now measurable), and the
+  optional SQLite / M1 dict-based comparison target the harness primitives
+  already support. The before/after numbers M4 produced carry over directly.
 - Final design doc update covering the full architecture — the artifact a
   reviewer actually reads.
 

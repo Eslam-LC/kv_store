@@ -12,6 +12,7 @@ namespace kv_store
         {
             ErrorCode errorCode;
             var ctx = new ReplContext();
+
             var rootCommand = BuildRootCommand(ctx);
 
             var dir = rootCommand.Parse(args).GetValue(ctx.DataDirOption!);
@@ -20,6 +21,13 @@ namespace kv_store
 
             if (!dir.Exists)
                 dir.Create();
+
+            var ops = rootCommand.Parse(args).GetValue(ctx.OpsOption);
+            if (rootCommand.Parse(args).GetValue(ctx.BenchmarkOption))
+            {
+                Benchmark.Run(dir.FullName, ops);
+                return;
+            }
 
             ctx.Engine = new WAEngine(dir.FullName); // later on the configs may include file names.
             errorCode = ctx.Engine.Init(out var errors);
@@ -173,6 +181,8 @@ namespace kv_store
         {
             public WAEngine Engine = null!;
             public Option<DirectoryInfo> DataDirOption = null!;
+            public Option<bool> BenchmarkOption = null!;
+            public Option<int> OpsOption = null!;
             public Argument<string> StartKeyArgument = null!;
             public Argument<string> EndKeyArgument = null!;
             public string? ErrorMessage;
@@ -188,12 +198,20 @@ namespace kv_store
                 Description = "specifies directory for wal.log and snapshot.dat.",
                 DefaultValueFactory = parseResult => new DirectoryInfo("./data"),
             };
-
             ctx.DataDirOption = dataDirOption;
+
+            var benchmarkOption = new Option<bool>("--benchmark");
+            ctx.BenchmarkOption = benchmarkOption;
+
+            var opsOption = new Option<int>("--ops")
+            {
+                DefaultValueFactory = parseResult => 100_000,
+            };
+            ctx.OpsOption = opsOption;
 
             var hexOption = new Option<bool>("--hex", "-x")
             {
-                Description = "use to enter raw hex values.",
+                Description = "use to enter raw hex ??100_000values.",
                 DefaultValueFactory = parseResult => false,
             };
 
@@ -266,7 +284,7 @@ namespace kv_store
                     replayCommand,
                     exitCommand,
                 },
-                Options = { dataDirOption },
+                Options = { dataDirOption, benchmarkOption, opsOption },
             };
 
             putCommand.SetAction(parseResult =>

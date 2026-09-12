@@ -3,7 +3,9 @@
   "permission": {
     "edit": {
       "**": "ask",
-      "tests/KvStore.Tests/**": "allow"
+      "tests/KvStore.Tests/**": "allow",
+      "Implementations/Benchmark.cs": "allow",
+      "Review.md": "allow"
     },
     "bash": {
       "git commit*": "ask",
