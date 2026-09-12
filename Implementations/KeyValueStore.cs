@@ -40,7 +40,7 @@ namespace kv_store.Implementations
             try
             {
                 KVList = new(dict);
-                memoryStorage = dict.Sum(kvp => kvp.Key.Length + kvp.Value?.Length ?? 0);
+                memoryStorage = dict.Sum(kvp => kvp.Key.Length + (kvp.Value?.Length ?? 0));
             }
             catch
             {

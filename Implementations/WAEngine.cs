@@ -334,8 +334,8 @@ namespace kv_store.Implementations
                 if (errorCode != None)
                     return errorCode;
             }
-            File.Create(WALFile).Dispose();
             File.Move(SnapshotFile + "-tmp", SnapshotFile, true);
+            File.Create(WALFile).Dispose();
 
             return None;
         }

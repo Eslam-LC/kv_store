@@ -14,7 +14,7 @@ namespace kv_store.Implementations
 
             try
             {
-                w.Write(store.Count); // deliberatly not using roDict.Count() to avoid unecessary O(n) traverse over the enumerable
+                w.Write(store.Count);
                 foreach (var (key, value) in ROKVL)
                 {
                     errCode = WARecord.WriteFrame(w, value == null ? DELETE : PUT, key, value);

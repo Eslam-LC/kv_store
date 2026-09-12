@@ -106,6 +106,40 @@ public class WAEngineTests : IDisposable
     }
 
     [Fact]
+    public void Init_CorruptWALTail_LoadsNothing()
+    {
+        var seed = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, seed.Init(out _));
+        Assert.Equal(ErrorCode.None, seed.Put("a", [1]));
+        Assert.Equal(ErrorCode.None, seed.Put("b", [2]));
+        File.AppendAllBytes(seed.WALFile, "GARBAGE"u8.ToArray());
+
+        var engine = new WAEngine(tempDir);
+        engine.Init(out _);
+
+        Assert.Equal(ErrorCode.KeyWasNotFound, engine.TryGet("a", out _));
+        Assert.Equal(ErrorCode.KeyWasNotFound, engine.TryGet("b", out _));
+    }
+
+    [Fact]
+    public void Replay_CorruptWALTail_PreservesExistingState()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+        Assert.Equal(ErrorCode.None, engine.Put("x", [9]));
+        Assert.Equal(ErrorCode.None, engine.Put("a", [1]));
+        Assert.Equal(ErrorCode.None, engine.Put("b", [2]));
+        File.AppendAllBytes(engine.WALFile, "GARBAGE"u8.ToArray());
+
+        Assert.NotEqual(ErrorCode.None, engine.ReplayRecords());
+
+        Assert.Equal(ErrorCode.None, engine.TryGet("x", out var vx));
+        Assert.Equal([9], vx);
+        Assert.Equal(ErrorCode.None, engine.TryGet("a", out _));
+        Assert.Equal(ErrorCode.None, engine.TryGet("b", out _));
+    }
+
+    [Fact]
     public void SaveSnapshot_ThenLoadSnapshot_NewEngine_RestoresState()
     {
         var engine = new WAEngine(tempDir);
