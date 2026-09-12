@@ -40,19 +40,20 @@ namespace kv_store
 
             while (true)
             {
-                Console.Write($"> ");
                 if (!string.IsNullOrWhiteSpace(ctx.ErrorMessage))
                 {
-                    Console.Write($"{ctx.ErrorMessage}\n");
+                    Console.WriteLine(ctx.ErrorMessage);
                     ctx.ErrorMessage = null;
                     continue;
                 }
                 if (!string.IsNullOrWhiteSpace(ctx.SuccessMessage))
                 {
-                    Console.Write($"{ctx.SuccessMessage}\n");
+                    Console.WriteLine(ctx.SuccessMessage);
                     ctx.SuccessMessage = null;
                     continue;
                 }
+
+                Console.Write($"> ");
 
                 string? input = Console.ReadLine();
 

@@ -13,8 +13,8 @@ frozen and flushed to a sorted, immutable SSTable, keeping the WAL append-only.
 ## Features
 
 - **Durability** — every `put`/`delete` is flushed to the WAL before it is acknowledged.
-- **Crash recovery** — on startup, catalog existing SSTables (newest first),
-  then load the snapshot (if any) and replay the WAL on top.
+- **Crash recovery** — on startup, `WAEngine.Init` loads the snapshot (if any),
+  replays the WAL on top, then catalogs the SSTables newest-first.
 - **Integrity** — each WAL record and stored pair carries a CRC32 checksum;
   truncated or corrupted records are detected and reported.
 - **Snapshotting** — `snapshot save` writes the full dataset and truncates the WAL.
@@ -62,16 +62,16 @@ The option applies to the whole session — subsequent REPL commands
 
 Interactive REPL. Commands:
 
-| Command                 | Description                                                                                                       |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `put <key> <value...>`  | Insert/overwrite a key. Tokens are concatenated; quote to keep spaces; `-x` reads each token as plain hex.         |
-| `get <key>`             | Print the value as a UTF-8 string; `-x` prints hex in 4-char groups.                                            |
-| `delete <key>`          | Remove a key.                                                                                                     |
-| `scan <start> <end>`    | Print every live entry in the inclusive `[start, end]` range, merged newest-first. `-x` shows values as hex.     |
-| `snapshot save [path]`  | Save the full dataset, then truncate the WAL.                                                                     |
-| `snapshot load [path]`  | Load a snapshot into the store.                                                                                   |
-| `replay`                | Append WAL records to the store.                                                                                  |
-| `exit`                  | Leave the program.                                                                                                |
+| Command                | Description                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `put <key> <value...>` | Insert/overwrite a key. Tokens are concatenated; quote to keep spaces; `-x` reads each token as plain hex.   |
+| `get <key>`            | Print the value as a UTF-8 string; `-x` prints hex in 4-char groups.                                         |
+| `delete <key>`         | Remove a key.                                                                                                |
+| `scan <start> <end>`   | Print every live entry in the inclusive `[start, end]` range, merged newest-first. `-x` shows values as hex. |
+| `snapshot save [path]` | Save the full dataset, then truncate the WAL.                                                                |
+| `snapshot load [path]` | Load a snapshot into the store.                                                                              |
+| `replay`               | Append WAL records to the store.                                                                             |
+| `exit`                 | Leave the program.                                                                                           |
 
 > `-x`/`--hex` dictates the format of **all** tokens on `put`, `get`, and `scan` —
 > hex in, hex out. `put` treats each argument as one token and concatenates them;
@@ -84,7 +84,6 @@ Interactive REPL. Commands:
 
 ```
 $ dotnet run
-> WAL appended from: ./data/wal_log.
 > put name "hello world"
 key: name was inserted.
 > put -x flag DEADBEEF
@@ -100,28 +99,26 @@ key: a was inserted.
 > put b bar
 key: b was inserted.
 > scan a c
-Key                 Value                                              
+Key                 Value
 ----------------------------------------------------------------------
-a                   foo                                               
-b                   bar                                               
+a                   foo
+b                   bar
 Scanned 'a'..'c': 2 pair(s).
 > snapshot save
 snapshot saved.
-> replay
-WAL restored.
 > delete name
 key: name was deleted.
 > exit
-Thank you for using the application.
+Thank you for using kv-store.
 ```
 
 ### Crash Recovery
 
-Startup catalogs every `SSTable-<5-digits>` file (newest first), then loads
-`<data-dir>/snapshot.dat` (if present) and replays `<data-dir>/wal_log` (if
-present) on top. The in-memory store, replayed WAL, and immutable tables
+Init loads `<data-dir>/snapshot.dat` into the in-memory store, replays
+`<data-dir>/wal.log` on top, and **then** catalogs every `SSTable-<5-digits>`
+file (newest first). The in-memory store, replayed WAL, and immutable tables
 together reconstruct the full state. With the default data directory these are
-`./data/snapshot.dat`, `./data/wal_log`, and `./data/SSTable-*`.
+`./data/snapshot.dat`, `./data/wal.log`, and `./data/SSTable-*`.
 
 Recovery is **not** automatic on interactive `snapshot load` — use `replay`
 explicitly to append WAL records after loading a snapshot. `replay` is also
@@ -131,7 +128,9 @@ available to re-apply the log on demand.
 
 - Single-process; no threading or concurrent access.
 - `get` decodes bytes as UTF-8; non-text data should be read with `get -x`.
-- A corrupt WAL halts recovery at the first bad record (no partial recovery).
+- A corrupt WAL stops replay at the first bad record, leaving the store
+  **partially loaded** — records already read are applied. Making replay atomic
+  (apply into a temporary store, swap in only on full success) is deferred.
 - A corrupted/unsupported SSTable aborts `Init` only if it is not a quarantine-able
   error; quarantine-able tables are moved to `*.corrupt` and skipped.
 - `delete` writes a tombstone (a null value). Reads of a deleted key are

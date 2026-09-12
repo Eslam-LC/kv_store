@@ -32,7 +32,7 @@ then frozen stores, then on-disk tables (newest first).
 
 ## Configuration
 
-- **`--data-dir <dir>` / `-d <dir>`** — data directory holding `wal_log` and
+- **`--data-dir <dir>` / `-d <dir>`** — data directory holding `wal.log` and
   `snapshot.dat`. Defaults to `./data`. Supplied once at startup, **before** any
   REPL command:
 
@@ -60,7 +60,7 @@ flowchart TB
     Br["BloomFilter — membership<br/>SparseIndex — key→offset"]
 
     CLI --> Engine
-    Engine --"WARecord.WriteFrame → wal_log"--> Engine
+    Engine --"WARecord.WriteFrame → wal.log"--> Engine
     Engine --> Store
     Engine --> Snap
     Engine --> Frozen
@@ -72,13 +72,14 @@ flowchart TB
 ### Components
 
 - **WAEngine** — enforces the WAL-first protocol: serialize a CRC-protected
-  record (`WARecord.WriteFrame`) → append to `wal_log` → apply to memory. Wires
+  record (`WARecord.WriteFrame`) → append to `wal.log` → apply to memory. Wires
   together the store, WAL, reader, snapshot, and SSTables. Freezes the memtable
   and flushes it to an SSTable when its byte footprint crosses
-  `flushThresholdBytes`; on startup catalogs `SSTable-<5 digits>` files (newest
-  first) and quarantines corrupted ones. `Scan` merges the memtable, frozen
-  stores, and tables into one sorted, newest-first, first-seen-wins view over
-  an inclusive `[startKey, endKey]` range (see Data Flow).
+  `flushThresholdBytes`; on startup loads the snapshot, replays the WAL on top,
+  then catalogs `SSTable-<5 digits>` files (newest first) and quarantines
+  corrupted ones. `Scan` merges the memtable, frozen stores, and tables into one
+  sorted, newest-first, first-seen-wins view over an inclusive
+  `[startKey, endKey]` range (see Data Flow).
 - **WARecord** — single frame codec shared by the WAL, snapshots, and SSTables:
   `[CRC:4][op:1][7-bit key][vlen:4+value, PUT only]`. A delete is a frame with no
   value payload; `ReadFromBytes` yields `value = null` for DELETEs.
@@ -122,17 +123,19 @@ flowchart TB
   store to `SSTable-<SerialNumber:D5>` (highest existing + 1) and register the
   resulting immutable table at the **front** of the in-memory catalog
   (`Insert(0, ...)`) so in-session reads stay newest-first.
-- **startup:** `Init` catalogs `SSTable-*` files newest-first (renaming
-  quarantine-able bad ones `*.corrupt`); then `Program` loads
-  `<data-dir>/snapshot.dat` (if present) and replays `<data-dir>/wal_log` (if
-  present) on top.
+- **startup:** `Init` ensures the data dir and empty `wal.log`/`snapshot.dat`
+  exist, loads the snapshot into the memstore, replays the WAL on top (newest
+  state in memory first), and only **then** catalogs `SSTable-*` files
+  newest-first (renaming quarantine-able bad ones `*.corrupt`). WAL replayed
+  first keeps the newest writes in the memtable; tables hold progressively older
+  data, which the newest-first read path already honors.
 - **snapshot save:** serialize store → truncate WAL (all state now in the
   snapshot).
 - **replay:** re-apply WAL records into the store on demand.
 
 ## On-Disk WAL Format
 
-Each record is written to `<data-dir>/wal_log` as a CRC followed by a
+Each record is written to `<data-dir>/wal.log` as a CRC followed by a
 length-prefixed body:
 
 ```
@@ -255,14 +258,16 @@ continues. Any other error aborts `Init` immediately and leaves the file in
 place. Overall result is `ErrorInSSTablesLoading` (plus the error list) when at
 least one table failed, `None` otherwise.
 
-Known weakness: a corrupt WAL halts recovery at the first bad record; there is
-no partial-recovery or record-skipping strategy.
+Known weakness: a corrupt WAL stops replay at the first bad record — records
+read so far are already applied, so recovery is **partial** (part of the log is
+recovered, not atomic). Applying into a temporary holder and committing only on
+full success would make replay atomic; deferred.
 
 ## Key Decisions & Trade-offs
 
 - **WAL-first (log then memory).** Disk is the source of truth for recovery;
   memory is a cache/index. Cost: every write is a synchronous disk append.
-- **Synchronous append per write.** Every `put`/`delete` opens `wal_log` in
+- **Synchronous append per write.** Every `put`/`delete` opens `wal.log` in
   append mode and writes the frame before the ack returns; the stream is
   flushed on close. Durability is guaranteed but write throughput is limited by
   disk latency. A batched/async flush would trade durability for speed —

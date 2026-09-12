@@ -293,7 +293,7 @@ namespace kv_store.Implementations
                 using FileStream stream = new(WALFile, FileMode.Open, FileAccess.Read);
                 using BinaryReader reader = new(stream);
 
-                var errorCode = WAReader.ReadRecords(reader, MemStore);
+                var errorCode = WAReader.ReadRecords(reader, in MemStore);
                 if (errorCode != None)
                     return errorCode;
             }
