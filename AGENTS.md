@@ -8,7 +8,7 @@ LSM-style key/value store. C# / .NET 10 console app (System.CommandLine REPL) wi
 - Test all: `dotnet test tests/KvStore.Tests/KvStore.Tests.csproj`
 - One test: `dotnet test tests/KvStore.Tests/KvStore.Tests.csproj --filter "FullyQualifiedName~WAEngineTests.Flush_TwoTables"`
 - Run REPL: `dotnet run` from repo root (default `./data` dir), or `dotnet run -- --data-dir /tmp/kv`
-- REPL commands: `put`, `get`, `delete`, `scan <start> <end>`, `snapshot save|load`, `replay`, `exit`. Values are UTF-8 text; hex via `puthex`/`gethex`, a `0x` prefix, or `-x` on `scan`.
+- REPL commands: `put`, `get`, `delete`, `scan <start> <end>`, `snapshot save|load`, `replay`, `exit`. Values are UTF-8 text; hex via `-x`/`--hex` on `put`/`get`/`scan` (`put -x` tokens are `0x`-prefixed).
 
 ## Workflow rules (project convention)
 

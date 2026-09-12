@@ -28,7 +28,7 @@ then frozen stores, then on-disk tables (newest first).
   WAL/snapshot/SSTable files.
 
 > Values are opaque byte arrays on disk; the CLI offers a best-effort UTF-8 view
-> (`get`) or a raw hex view (`gethex`), but the storage layer is schema-free.
+> (`get`) or a raw hex view (`get -x`), but the storage layer is schema-free.
 
 ## Configuration
 
@@ -107,7 +107,7 @@ flowchart TB
 - **delete(key):** append DELETE record to WAL (no value payload) → write a
   tombstone (`KVList[key] = null`). Idempotent: returns `None` even for absent
   keys, and the tombstone node keeps the key in memory.
-- **get / gethex(key):** newest in-memory store → frozen stores (newest first)
+- **get(key):** newest in-memory store → frozen stores (newest first)
   → on-disk tables (newest first). A tombstone hit is terminal: it reports
   `KeyNotFound` (engine normalizes `KeyDeleted`) and does **not** fall through
   to older sources, so a delete always shadows older data.

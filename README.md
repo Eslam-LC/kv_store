@@ -26,9 +26,9 @@ frozen and flushed to a sorted, immutable SSTable, keeping the WAL append-only.
   SSTables; tombstones shadow older data and never resurrect.
 - **Corruption isolation** — a corrupted/unsupported SSTable is quarantined
   (renamed `*.corrupt`) and reported; the rest of the store still loads.
-- **Binary values** — store and retrieve raw bytes in hex via `puthex`/`gethex`,
-  or a `0x` prefix in `put`.
-- **Text values** — view stored bytes as UTF-8 via `get`.
+- **Binary values** — `-x`/`--hex` on `put`, `get`, and `scan` reads and prints
+  raw bytes as hex; `put -x` tokens must be `0x`-prefixed.
+- **Text values** — view stored bytes as UTF-8 via `get` (the default).
 - **Configurable storage** — point the WAL and snapshot anywhere with `--data-dir`; the directory is auto-created.
 - **Minimal footprint** — only System.CommandLine and System.IO.Hashing; no database engine.
 
@@ -64,10 +64,8 @@ Interactive REPL. Commands:
 
 | Command                 | Description                                                                                                       |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `put <key> <value...>`  | Insert/overwrite a key. Tokens are concatenated; quote to keep spaces, or prefix a token with `0x` for raw bytes. |
-| `puthex <key> <hex...>` | Insert a key whose value is given as hex (e.g. `0xDEADBEEF`).                                                     |
-| `get <key>`             | Print the value as a UTF-8 string.                                                                                |
-| `gethex <key>`          | Print the value as space-separated hex bytes.                                                                     |
+| `put <key> <value...>`  | Insert/overwrite a key. Tokens are concatenated; quote to keep spaces; `-x` reads each token as `0x`-prefixed hex. |
+| `get <key>`             | Print the value as a UTF-8 string; `-x` prints space-separated hex bytes.                                          |
 | `delete <key>`          | Remove a key.                                                                                                     |
 | `scan <start> <end>`    | Print every live entry in the inclusive `[start, end]` range, merged newest-first. `-x` shows values as hex.     |
 | `snapshot save [path]`  | Save the full dataset, then truncate the WAL.                                                                     |
@@ -75,10 +73,11 @@ Interactive REPL. Commands:
 | `replay`                | Append WAL records to the store.                                                                                  |
 | `exit`                  | Leave the program.                                                                                                |
 
-> `put` and `puthex` treat each argument as one token and concatenate them. Wrap a
-> value in quotes to keep spaces (`put name "hello world"`), or prefix with `0x` to
-> write literal bytes. `put` value that is neither quoted nor `0x`-prefixed is
-> UTF-8 encoded.
+> `put` treats each argument as one token and concatenates them. Wrap a value in
+> quotes to keep spaces (`put name "hello world"`). With `-x`, every token must be
+> `0x`-prefixed hex (`put -x flag 0xDEADBEEF`) and is written as literal bytes;
+> without it, values are UTF-8 encoded. `get -x` and `scan -x` print values as
+> space-separated hex bytes.
 
 ### Example
 
@@ -87,11 +86,11 @@ $ dotnet run
 > WAL appended from: ./data/wal_log.
 > put name "hello world"
 key: name was inserted.
-> puthex flag DEADBEEF
+> put -x flag 0xDEADBEEF
 key: flag was inserted.
 > get name
 Retrieved 'name' (11 chars).
-> gethex flag
+> get -x flag
 Retrieved 'flag' (11 chars).
 > put a foo
 key: a was inserted.
@@ -128,7 +127,7 @@ available to re-apply the log on demand.
 ## Notes & Limitations
 
 - Single-process; no threading or concurrent access.
-- `get` decodes bytes as UTF-8; non-text data should be read with `gethex`.
+- `get` decodes bytes as UTF-8; non-text data should be read with `get -x`.
 - A corrupt WAL halts recovery at the first bad record (no partial recovery).
 - A corrupted/unsupported SSTable aborts `Init` only if it is not a quarantine-able
   error; quarantine-able tables are moved to `*.corrupt` and skipped.
