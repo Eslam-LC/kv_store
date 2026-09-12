@@ -140,6 +140,40 @@ public class WAEngineTests : IDisposable
     }
 
     [Fact]
+    public void Flush_OverThreshold_CompactsToSingleTable()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+        for (int i = 0; i < 5; i++)
+        {
+            Assert.Equal(ErrorCode.None, engine.Put($"k{i}", [1]));
+            Assert.Equal(ErrorCode.None, engine.FlushToSSTable());
+        }
+
+        Assert.Single(Directory.GetFiles(tempDir, "SSTable-*"));
+    }
+
+    [Fact]
+    public void Compact_ThenRestart_SingleTableOnDisk()
+    {
+        var engine = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine.Init(out _));
+        for (int i = 0; i < 5; i++)
+        {
+            Assert.Equal(ErrorCode.None, engine.Put($"k{i}", [1]));
+            Assert.Equal(ErrorCode.None, engine.FlushToSSTable());
+        }
+        Assert.Equal(ErrorCode.None, engine.SaveSnapshot());
+        Assert.Single(Directory.GetFiles(tempDir, "SSTable-*"));
+
+        var engine2 = new WAEngine(tempDir);
+        Assert.Equal(ErrorCode.None, engine2.Init(out _));
+
+        Assert.Equal(ErrorCode.None, engine2.TryGet("k0", out var v0));
+        Assert.Equal([1], v0);
+    }
+
+    [Fact]
     public void SaveSnapshot_ThenLoadSnapshot_NewEngine_RestoresState()
     {
         var engine = new WAEngine(tempDir);

@@ -123,6 +123,10 @@ flowchart TB
   store to `SSTable-<SerialNumber:D5>` (highest existing + 1) and register the
   resulting immutable table at the **front** of the in-memory catalog
   (`Insert(0, ...)`) so in-session reads stay newest-first.
+- **compact:** when `immutableSSTables.Count > CompactThreshold` (4) after a
+  flush, flatten the whole catalog newest-first into a single table (reusing
+  the oldest serial), prune all tombstones, then delete the sources — see
+  Compaction below.
 - **startup:** `Init` ensures the data dir and empty `wal.log`/`snapshot.dat`
   exist, loads the snapshot into the memstore, replays the WAL on top (newest
   state in memory first), and only **then** catalogs `SSTable-*` files
@@ -230,6 +234,46 @@ A single sorted, immutable table written to `SSTable-<SerialNumber:D5>`
 - The leftmost table in the catalog set is written first as `SSTable-TMP`
   then atomically `File.Move`d to its final name, so a crash mid-write leaves
   no partial `SSTable-#####`.
+
+## Compaction
+
+Triggered automatically at the end of every flush when the table count exceeds
+`CompactThreshold` (`> 4`): the whole catalog is folded back into a single
+table.
+
+- **Flatten, not tiers.** All tables merge newest-first into one in a single
+  pass — deliberately no leveled/tiered structure. One rule, no level sizing,
+  no tombstone bookkeeping. Trade-off: every compaction rewrites the entire
+  history (see upgrade path below).
+- **Merge kernel = the range-scan fold.** Each table's sorted delta is folded
+  via insert-if-absent (`AddWithoutUpdate`) in newest-first catalog order, so
+  the newest write/tombstone wins across tables — the identical first-wins
+  semantics `Scan` uses per call. Compaction just materializes that fold into
+  a persistent table.
+- **Tombstones are pruned here.** Because the flatten merges the *entire*
+  catalog, nothing survives below it, so every tombstone has shadowed its last
+  possible PUT and `null` entries are dropped instead of written. This is the
+  pass that reclaims deleted-key bytes and keeps tombstones from accumulating
+  forever — a correctness rule that only holds for a full flatten, not for
+  merging a *subset* of tables (a tombstone then still shadows unmerged older
+  tables and must survive).
+- **Commit ordering.** Write the merged table to `SSTable-TMP`, `File.Move`
+  it onto the oldest table's serial (overwrite: an atomic rename), and only
+  then `File.Delete` the other source files; the catalog is replaced with the
+  single winner. A crash before the move leaves the old set intact; a crash
+  after the move leaves the merged table plus stragglers, which the next
+  `Init` re-catalogs and a later compaction flattens again — never data loss.
+- **Serial numbering stays dense-bottomed.** The winner reuses the oldest
+  member's serial (`SSTable-00001`) and the stragglers' numbers are freed for
+  reuse by future flushes. Read order is unaffected — the catalog is ordered
+  by insertion, not filename.
+- **Read path is untouched.** Reads already merge across N tables newest-first
+  (memtable → frozen → `SSTable-*`), so they were correct pre- and post-compact;
+  compaction only shrinks the pile.
+- **Upgrade path.** If the full-history rewrite every trigger stings, the next
+  step is leveled compaction (levels with non-overlapping files, tombstone
+  removal only when compacting past the deepest holder of a key) — an M3
+  extension, explicitly not built now.
 
 ## Error Handling
 

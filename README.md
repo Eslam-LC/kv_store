@@ -24,6 +24,9 @@ frozen and flushed to a sorted, immutable SSTable, keeping the WAL append-only.
 - **Range scans** — `scan <start-key> <end-key>` returns every live entry in an
   inclusive range, merged newest-first across the memtable, frozen stores, and
   SSTables; tombstones shadow older data and never resurrect.
+- **Compaction** — when the SSTable count exceeds a threshold, `flush`
+  automatically folds the whole catalog into a single table, reclaiming
+  tombstoned bytes (see Notes & Limitations).
 - **Corruption isolation** — a corrupted/unsupported SSTable is quarantined
   (renamed `*.corrupt`) and reported; the rest of the store still loads.
 - **Binary values** — `-x`/`--hex` on `put`, `get`, and `scan` reads and prints
@@ -136,7 +139,8 @@ available to re-apply the log on demand.
   error; quarantine-able tables are moved to `*.corrupt` and skipped.
 - `delete` writes a tombstone (a null value). Reads of a deleted key are
   reported as not-found and never fall through to older data; the key bytes stay
-  in memory and on disk until a future compaction pass reclaims them.
+  in memory and on disk until the next compaction pass reclaims them (triggered
+  automatically once the SSTable count exceeds 4).
 - No authentication, networking, or persistence beyond the WAL/snapshot/SSTable files.
 
 ## Documentation

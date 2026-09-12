@@ -5,32 +5,29 @@
 In-memory dictionary + WAL + snapshot + CLI. Every write durable before
 acknowledged; full crash recovery via replay.
 
-## M2 — LSM-tree (in progress)
+## M2 — LSM-tree (done)
 
 - Skip list memtable (done)
-- SSTable flush + bloom filter + sparse index (in progress)
-- Compaction
-- Range queries
+- SSTable flush + bloom filter + sparse index (done)
+- Range queries (done)
+
+Compaction shipped in M3.
 
 WAL still protects the memtable; SSTables replace Snapshot as the durable
 checkpoint mechanism.
 
-## M3 — Compaction & multi-SSTable read path
+## M3 — Compaction & multi-SSTable read path (done)
 
-- **Leveled or size-tiered compaction**: merge multiple SSTables into fewer,
-  larger ones; drop entries shadowed by newer writes or past their DELETE
-  tombstone.
-- **Tombstone handling**: a DELETE in a newer SSTable must correctly shadow a
-  PUT in an older one during merge and during reads. Real correctness trap — a
-  naive merge that just "keeps the newest value per key" must also eventually
-  drop tombstones once no older SSTable holds the shadowed key, or they
-  accumulate forever.
-- **Read path across N SSTables**: active memtable → immutable/flushing
-  memtables → SSTables newest-to-oldest, short-circuiting on first hit (bloom
-  filter first, to skip most files).
-- **File naming/versioning + startup discovery**: scan the data directory,
-  order SSTables by generation/timestamp, so a restart correctly rebuilds the
-  read order.
+- **Compaction**: produced `CompactFlat` — a full flatten of the catalog into
+  one table, triggered automatically when the table count exceeds a threshold
+  (see docs/DESIGN.md "Compaction"). Tombstones are pruned because nothing
+  survives below a full flatten.
+- **Tombstone handling**: solved by the flatten-above invariant — tombstones
+  live only in a context where the merge can prove no older source exists.
+- **Read path across N SSTables**: memtable → frozen stores → SSTables tested
+  newest-first with bloom-first short-circuiting; live and correct.
+- **File naming/versioning + startup discovery**: `SSTable-<5 digits>`
+  catalogued newest-first on `Init`; compaction keeps serials dense-bottomed.
 
 ## M4 — Concurrency
 

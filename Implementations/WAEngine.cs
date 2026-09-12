@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Text.RegularExpressions;
 using kv_store.EnumsAndConstants;
 using static kv_store.EnumsAndConstants.Constants;
@@ -31,6 +32,8 @@ namespace kv_store.Implementations
 
         [GeneratedRegex("^SSTable-([0-9]{5})$")]
         private static partial Regex MyRegex();
+
+        const int CompactThreshold = 4;
 
         public ErrorCode Init(out List<(ErrorCode e, string? f)> errors)
         {
@@ -221,7 +224,7 @@ namespace kv_store.Implementations
 
             foreach (var item in pairs)
             {
-                keyValues.AddWithoutUpdate(item.Key, item.Value ?? Deleted!);
+                _ = keyValues.AddWithoutUpdate(item.Key, item.Value ?? Deleted!);
             }
 
             for (int i = Frozen_.Count - 1; i >= 0; i--)
@@ -233,7 +236,7 @@ namespace kv_store.Implementations
 
                 foreach (var item in pairs)
                 {
-                    keyValues.AddWithoutUpdate(item.Key, item.Value ?? Deleted!);
+                    _ = keyValues.AddWithoutUpdate(item.Key, item.Value ?? Deleted!);
                 }
             }
 
@@ -245,7 +248,7 @@ namespace kv_store.Implementations
 
                 foreach (var item in pairs)
                 {
-                    var _ = keyValues.AddWithoutUpdate(item.Key, item.Value ?? Deleted!);
+                    _ = keyValues.AddWithoutUpdate(item.Key, item.Value ?? Deleted!);
                 }
             }
 
@@ -363,17 +366,17 @@ namespace kv_store.Implementations
 
             ErrorCode errorCode;
 
-            var old = MemStore;
-            Frozen_.Add(old);
+            var oldStore = MemStore;
+            Frozen_.Add(oldStore);
             MemStore = new();
-            errorCode = old.MakeImmutable();
+            errorCode = oldStore.MakeImmutable();
             if (errorCode != None)
                 return errorCode;
 
             while (Frozen_.Count > 0)
             {
-                old = Frozen_[0];
-                errorCode = old.GetImmutableKVList(
+                oldStore = Frozen_[0];
+                errorCode = oldStore.GetImmutableKVList(
                     out ImmutableSkipList<string, byte[]?> keyValuePairs
                 );
                 if (errorCode != None)
@@ -400,7 +403,7 @@ namespace kv_store.Implementations
                     errorCode = SSTable.WriteTableToFile(
                         tmpPath,
                         keyValuePairs,
-                        old.Count,
+                        oldStore.Count,
                         out ImmutableSSTable? ssTable
                     );
                     if (errorCode != None)
@@ -426,16 +429,70 @@ namespace kv_store.Implementations
                     return GetErrorCode(ex);
                 }
 
-                if (!Frozen_.Remove(old))
+                if (!Frozen_.Remove(oldStore))
                     return UnexpectedFailure;
             }
+            if (immutableSSTables.Count > CompactThreshold)
+                CompactFlat();
 
             return None;
         }
 
-        private static void MoveSSTable(string tmpPath, string finalPath, ImmutableSSTable ssTable)
+        public ErrorCode CompactFlat()
         {
-            File.Move(tmpPath, finalPath);
+            ErrorCode errorCode;
+            string tmpPath = Path.Combine(FilesPath, $"{SSTFileBaseName}-TMP");
+            string finalPath = immutableSSTables[^1].FileName;
+            SkipList<string, byte[]> keyValues = [];
+
+            foreach (var table in immutableSSTables)
+            {
+                errorCode = table.Scan(table.FirstKey, table.LastKey, out var pairs);
+                if (errorCode != None)
+                    return errorCode;
+
+                foreach (var item in pairs)
+                {
+                    _ = keyValues.AddWithoutUpdate(item.Key, item.Value ?? Deleted!);
+                }
+            }
+
+            ImmutableSkipList<string, byte[]> result = new(
+                keyValues.Where(kv => kv.Value != Deleted)
+            );
+            errorCode = SSTable.WriteTableToFile(
+                tmpPath,
+                result!,
+                result.Count,
+                out ImmutableSSTable? ssTable
+            );
+
+            if (errorCode != None)
+                return errorCode;
+
+            if (ssTable == null)
+                return UnexpectedFailure;
+
+            MoveSSTable(tmpPath, finalPath, ssTable, true);
+
+            foreach (var table in immutableSSTables)
+            {
+                if (table.FileName != finalPath)
+                    File.Delete(table.FileName);
+            }
+            immutableSSTables.Clear();
+            immutableSSTables.Add(ssTable);
+            return None;
+        }
+
+        private static void MoveSSTable(
+            string tmpPath,
+            string finalPath,
+            ImmutableSSTable ssTable,
+            bool overWrite = false
+        )
+        {
+            File.Move(tmpPath, finalPath, overWrite);
             ssTable.FileName = finalPath;
         }
     }
