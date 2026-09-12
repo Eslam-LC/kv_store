@@ -342,7 +342,6 @@ public class WAEngineTests : IDisposable
 
     static List<KeyValuePair<string, byte[]>> Scan(WAEngine engine, string startKey, string endKey)
     {
-        System.Console.WriteLine($"sk: {startKey}, ek:{endKey}");
         Assert.Equal(ErrorCode.None, engine.Scan(startKey, endKey, out var results));
         return [.. results];
     }
