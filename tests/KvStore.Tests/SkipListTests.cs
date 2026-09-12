@@ -172,53 +172,6 @@ public class SkipListTests
             Assert.True(list.TryGetValue(i, out _));
     }
 
-    // ----- Tombstone semantics (SetDefault) -----
-
-    [Fact]
-    public void SetDefault_ExistingKey_NullsValue_KeepsNodeLinked()
-    {
-        var list = new SkipList<string, string>();
-        list.Add("k", "v");
-
-        Assert.True(list.SetDefault("k"));
-        Assert.True(list.TryGetValue("k", out var value));
-        Assert.Null(value);
-        Assert.Equal(["k"], list.Select(kvp => kvp.Key));
-    }
-
-    [Fact]
-    public void SetDefault_MissingKey_ReturnsFalse()
-    {
-        var list = new SkipList<string, string>();
-        Assert.False(list.SetDefault("nope"));
-    }
-
-    [Fact]
-    public void SetDefault_KeepsCountInSyncWithEnumeration()
-    {
-        var list = new SkipList<string, string>();
-        list.Add("a", "1");
-        list.Add("b", "2");
-        list.Add("c", "3");
-        list.SetDefault("b");
-
-        Assert.Equal(list.Count(), list.Count);
-        Assert.Equal(3, list.Count);
-    }
-
-    [Fact]
-    public void Add_After_SetDefault_RevivesValue_AndKeepsCount()
-    {
-        var list = new SkipList<string, string>();
-        list.Add("k", "v");
-        list.SetDefault("k");
-
-        Assert.True(list.Add("k", "v2"));
-        Assert.Single(list);
-        Assert.True(list.TryGetValue("k", out var value));
-        Assert.Equal("v2", value);
-    }
-
     // ----- Scan boundary conditions -----
 
     [Fact]

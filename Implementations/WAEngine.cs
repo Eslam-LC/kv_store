@@ -290,6 +290,7 @@ namespace kv_store.Implementations
                 return InstanceIsNotInitialized;
 
             KeyValueStore store = new();
+            store.BulkPut(MemStore);
 
             try
             {
@@ -309,7 +310,7 @@ namespace kv_store.Implementations
                 return PathIsInvalid;
             }
 
-            MemStore.BulkPut(store);
+            MemStore = store;
 
             return None;
         }
