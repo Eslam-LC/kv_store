@@ -329,8 +329,9 @@ namespace kv_store
                     ctx.ErrorMessage = $"Error: {errCode}.";
                     return;
                 }
-                ctx.SuccessMessage =
-                    $"Retrieved '{key}' ({(hex ? PrintByteArray(value!) : PrintByteArrayAsString(value!))?.Length ?? 0} chars).";
+                var output = hex ? PrintByteArray(value!) : PrintByteArrayAsString(value!);
+                Console.WriteLine(output);
+                ctx.SuccessMessage = $"Retrieved '{key}' ({output?.Length ?? 0} chars).";
             });
 
             deleteCommand.SetAction(parseResult =>

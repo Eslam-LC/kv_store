@@ -65,7 +65,7 @@ Interactive REPL. Commands:
 | Command                 | Description                                                                                                       |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `put <key> <value...>`  | Insert/overwrite a key. Tokens are concatenated; quote to keep spaces; `-x` reads each token as plain hex.         |
-| `get <key>`             | Print the value as a UTF-8 string; `-x` prints space-separated hex bytes.                                          |
+| `get <key>`             | Print the value as a UTF-8 string; `-x` prints hex in 4-char groups.                                            |
 | `delete <key>`          | Remove a key.                                                                                                     |
 | `scan <start> <end>`    | Print every live entry in the inclusive `[start, end]` range, merged newest-first. `-x` shows values as hex.     |
 | `snapshot save [path]`  | Save the full dataset, then truncate the WAL.                                                                     |
@@ -77,8 +77,8 @@ Interactive REPL. Commands:
 > hex in, hex out. `put` treats each argument as one token and concatenates them;
 > wrap a value in quotes to keep spaces (`put name "hello world"`). With `put -x`,
 > each value token is parsed as plain hex (`put -x flag DEADBEEF`); without `-x`,
-> values are UTF-8 encoded. `get -x` and `scan -x` print each value as
-> space-separated hex bytes.
+> values are UTF-8 encoded. `get -x` and `scan -x` print each value as hex in
+> 4-char groups (e.g. `DEAD BEEF`).
 
 ### Example
 
@@ -90,9 +90,11 @@ key: name was inserted.
 > put -x flag DEADBEEF
 key: flag was inserted.
 > get name
+hello world
 Retrieved 'name' (11 chars).
 > get -x flag
-Retrieved 'flag' (11 chars).
+DEAD BEEF
+Retrieved 'flag' (9 chars).
 > put a foo
 key: a was inserted.
 > put b bar
