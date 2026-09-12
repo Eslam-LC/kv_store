@@ -27,7 +27,7 @@ frozen and flushed to a sorted, immutable SSTable, keeping the WAL append-only.
 - **Corruption isolation** — a corrupted/unsupported SSTable is quarantined
   (renamed `*.corrupt`) and reported; the rest of the store still loads.
 - **Binary values** — `-x`/`--hex` on `put`, `get`, and `scan` reads and prints
-  raw bytes as hex; `put -x` tokens must be `0x`-prefixed.
+  raw bytes as hex; `put -x` tokens are plain hex (no `0x` prefix).
 - **Text values** — view stored bytes as UTF-8 via `get` (the default).
 - **Configurable storage** — point the WAL and snapshot anywhere with `--data-dir`; the directory is auto-created.
 - **Minimal footprint** — only System.CommandLine and System.IO.Hashing; no database engine.
@@ -64,7 +64,7 @@ Interactive REPL. Commands:
 
 | Command                 | Description                                                                                                       |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `put <key> <value...>`  | Insert/overwrite a key. Tokens are concatenated; quote to keep spaces; `-x` reads each token as `0x`-prefixed hex. |
+| `put <key> <value...>`  | Insert/overwrite a key. Tokens are concatenated; quote to keep spaces; `-x` reads each token as plain hex.         |
 | `get <key>`             | Print the value as a UTF-8 string; `-x` prints space-separated hex bytes.                                          |
 | `delete <key>`          | Remove a key.                                                                                                     |
 | `scan <start> <end>`    | Print every live entry in the inclusive `[start, end]` range, merged newest-first. `-x` shows values as hex.     |
@@ -73,10 +73,11 @@ Interactive REPL. Commands:
 | `replay`                | Append WAL records to the store.                                                                                  |
 | `exit`                  | Leave the program.                                                                                                |
 
-> `put` treats each argument as one token and concatenates them. Wrap a value in
-> quotes to keep spaces (`put name "hello world"`). With `-x`, every token must be
-> `0x`-prefixed hex (`put -x flag 0xDEADBEEF`) and is written as literal bytes;
-> without it, values are UTF-8 encoded. `get -x` and `scan -x` print values as
+> `-x`/`--hex` dictates the format of **all** tokens on `put`, `get`, and `scan` —
+> hex in, hex out. `put` treats each argument as one token and concatenates them;
+> wrap a value in quotes to keep spaces (`put name "hello world"`). With `put -x`,
+> each value token is parsed as plain hex (`put -x flag DEADBEEF`); without `-x`,
+> values are UTF-8 encoded. `get -x` and `scan -x` print each value as
 > space-separated hex bytes.
 
 ### Example
@@ -86,7 +87,7 @@ $ dotnet run
 > WAL appended from: ./data/wal_log.
 > put name "hello world"
 key: name was inserted.
-> put -x flag 0xDEADBEEF
+> put -x flag DEADBEEF
 key: flag was inserted.
 > get name
 Retrieved 'name' (11 chars).

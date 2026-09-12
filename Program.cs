@@ -287,7 +287,7 @@ namespace kv_store
                     string str = value[i];
                     if (hex)
                     {
-                        var errorCode = ConvertHexStringToBytes(str[2..], out ABytes[i]);
+                        var errorCode = ConvertHexStringToBytes(str, out ABytes[i]);
                         if (errorCode != None || ABytes[i] == null)
                         {
                             ctx.ErrorMessage = $"Error: {errorCode}";
