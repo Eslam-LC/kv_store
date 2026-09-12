@@ -258,10 +258,11 @@ continues. Any other error aborts `Init` immediately and leaves the file in
 place. Overall result is `ErrorInSSTablesLoading` (plus the error list) when at
 least one table failed, `None` otherwise.
 
-Known weakness: a corrupt WAL stops replay at the first bad record — records
-read so far are already applied, so recovery is **partial** (part of the log is
-recovered, not atomic). Applying into a temporary holder and committing only on
-full success would make replay atomic; deferred.
+Known weakness: a corrupt WAL aborts replay at the first bad record. Replay is
+**atomic** — records are read into a temporary store and `MemStore` is swapped
+in by reference only when the whole log applies — so nothing partial survives,
+but it is all-or-nothing: a single bad frame discards the entire log's replay.
+Skipping or recovering past a corrupt frame is future work.
 
 ## Key Decisions & Trade-offs
 

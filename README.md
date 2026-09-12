@@ -128,9 +128,10 @@ available to re-apply the log on demand.
 
 - Single-process; no threading or concurrent access.
 - `get` decodes bytes as UTF-8; non-text data should be read with `get -x`.
-- A corrupt WAL stops replay at the first bad record, leaving the store
-  **partially loaded** — records already read are applied. Making replay atomic
-  (apply into a temporary store, swap in only on full success) is deferred.
+- A corrupt WAL stops replay at the first bad record, but replay is **atomic**:
+  records are read into a temp store and swapped in only on full success, so a
+  partial log never leaves the store half-recovered. (Skipping/recovering past
+  the bad record is future work.)
 - A corrupted/unsupported SSTable aborts `Init` only if it is not a quarantine-able
   error; quarantine-able tables are moved to `*.corrupt` and skipped.
 - `delete` writes a tombstone (a null value). Reads of a deleted key are
